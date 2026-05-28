@@ -100,3 +100,37 @@ fi
 
 echo -e "\n  ${GREEN}${BOLD}✨ Installation complete!${RESET}\n"
 echo -e "  Run ${CYAN}stacks help${RESET} to get started.\n"
+
+# ── Create all config files ───────────────────────────────────────────────────
+CONF_DIR="/home/$USER/.config/stacks"
+/usr/bin/mkdir -p "$CONF_DIR/descriptions"
+
+# backup.conf
+if [ ! -f "$CONF_DIR/backup.conf" ]; then
+cat > "$CONF_DIR/backup.conf" << EOF
+BACKUP_DEST="/home/$USER/Backup"
+FILES=(
+  "/usr/local/bin/stacks"
+  "/usr/local/lib/stacks_build.py"
+  "/usr/local/lib/stacks_fix.py"
+  "/usr/local/lib/stacks_inject.py"
+  "/usr/local/lib/stacks_search.py"
+  "/home/$USER/.zshrc"
+  "/home/$USER/.bashrc"
+)
+FOLDERS=(
+  "$STACKS_DIR"
+  "$DYNAMICS_DIR"
+  "$CONF_DIR"
+)
+EOF
+ok "backup.conf created"
+fi
+
+# stacks.conf additions
+cat >> "$CONF_DIR/stacks.conf" << EOF
+SABLIER_SCALE_ENABLED=1
+DELAY=2
+EOF
+
+ok "All configs created at $CONF_DIR"
