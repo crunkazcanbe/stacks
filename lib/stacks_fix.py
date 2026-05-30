@@ -61,6 +61,9 @@ def load_conf():
         "FIX_DEEP_INSPECT": "1",
         "FIX_SUBNET_BASE": "10.50",
         "FIX_BACKUP": "1",
+        "FIX_REMOVE_GAPS": "1",  # set to 0 to disable blank line removal in service blocks
+        "FIX_HC_IGNORE_STACKS": "",  # space-separated stack files to skip healthcheck changes
+        "FIX_REPLACE_BROKEN_HC": "0",  # set to 1 to replace actively-failing healthchecks
         "FIX_STRIP_PROFILES": "1",  # set to 0 to disable auto-stripping of profiles: blocks
         "FIX_SKIP_FILES": "net_0-ext.yml",
         "FIX_HC_SKIP": "",
@@ -242,49 +245,166 @@ def hc_from_pattern(image, ports):
     return (['CMD-SHELL', 'wget -qO- http://localhost:8080/ || exit 1'],
             '30s','10s',5,'60s', "generic")
 
-def hc_from_inspect(container):
-    """
-    Deep-inspect a RUNNING container. Returns a healthcheck tuple or None.
-    Priority: image's own baked-in Healthcheck.Test, else first exposed port.
-    Only trusted when the container is actually running.
-    """
+
+# ── Image healthcheck knowledge base ────────────────────────────────────────
+IMAGE_HC_DB = {
+    "cloudflare/cloudflared":               (["CMD", "cloudflared", "version"], "30s", "5s", 3, "10s"),
+    "thespad/traefik-crowdsec-bouncer":      (["CMD-SHELL", "wget -qO- http://localhost:8080/api/v1/forwardAuth || exit 1"], "15s", "5s", 5, "30s"),
+    "crowdsecurity/cs-traefik-bouncer":      (["CMD-SHELL", "wget -qO- http://localhost:8080/api/v1/forwardAuth || exit 1"], "15s", "5s", 5, "30s"),
+    "crowdsecurity/crowdsec":               (["CMD-SHELL", "cscli version || exit 1"], "30s", "5s", 3, "30s"),
+    "tailscale/tailscale":                  (["CMD-SHELL", "tailscale status || exit 1"], "30s", "5s", 3, "30s"),
+    "pihole/pihole":                        (["CMD-SHELL", "dig +short +norecurse +retry=0 @127.0.0.1 pi.hole || exit 1"], "30s", "10s", 3, "30s"),
+    "adguard/adguardhome":                  (["CMD-SHELL", "wget -qO- http://localhost:3000 || exit 1"], "30s", "5s", 3, "20s"),
+    "nginxproxy/nginx-proxy-manager":       (["CMD-SHELL", "wget -qO- http://localhost:81/api || exit 1"], "30s", "5s", 3, "30s"),
+    "jc21/nginx-proxy-manager":             (["CMD-SHELL", "wget -qO- http://localhost:81/api || exit 1"], "30s", "5s", 3, "30s"),
+    "technitium/dns-server":                (["CMD-SHELL", "curl -sf http://localhost:5380/ || exit 1"], "30s", "5s", 3, "30s"),
+    "fosrl/pangolin":                       (["CMD-SHELL", "wget -qO- http://localhost:3001/ || exit 1"], "30s", "5s", 3, "30s"),
+    "fosrl/gerbil":                         (["CMD-SHELL", "wget -qO- http://localhost:3003/ || exit 1"], "30s", "5s", 3, "30s"),
+    "netbirdio/management":                 (["CMD-SHELL", "wget -qO- http://localhost:80/ || exit 1"], "30s", "5s", 3, "30s"),
+    "netbirdio/dashboard":                  (["CMD-SHELL", "wget -qO- http://localhost:80/ || exit 1"], "30s", "5s", 3, "20s"),
+    "authelia/authelia":                    (["CMD-SHELL", "wget -qO- http://localhost:9091/api/health || exit 1"], "30s", "5s", 3, "30s"),
+    "acouvreur/sablier":                    (["CMD-SHELL", "wget -qO- http://localhost:10000/health || exit 1"], "15s", "5s", 3, "10s"),
+    "wazuh/wazuh-indexer":                  (["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"], "30s", "10s", 5, "60s"),
+    "wazuh/wazuh-manager":                  (["CMD-SHELL", "/var/ossec/bin/wazuh-control status || exit 1"], "30s", "10s", 5, "60s"),
+    "wazuh/wazuh-dashboard":                (["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"], "30s", "10s", 5, "60s"),
+    "portainer/portainer":                  (["CMD-SHELL", "wget -qO- http://localhost:9000/api/system/status || exit 1"], "30s", "5s", 3, "20s"),
+    "traefik":                              (["CMD-SHELL", "traefik healthcheck || exit 1"], "10s", "5s", 3, "10s"),
+    "dperson/openvpn-client":               (["CMD-SHELL", "ip addr show tun0 || exit 1"], "30s", "5s", 3, "30s"),
+    "qmcgaw/gluetun":                       (["CMD-SHELL", "wget -qO- http://localhost:8000/v1/vpn/status || exit 1"], "30s", "5s", 3, "30s"),
+    "dperson/torproxy":                     (["CMD-SHELL", "nc -z localhost 8118 || exit 1"], "30s", "5s", 3, "30s"),
+    "ghcr.io/goauthentik/server":           (["CMD-SHELL", "ak healthcheck || exit 1"], "30s", "5s", 5, "30s"),
+    "v2fly/v2fly-core":                     (["CMD-SHELL", "v2ray version || exit 1"], "30s", "5s", 3, "10s"),
+    "nginx":                                (["CMD-SHELL", "nginx -t || exit 1"], "30s", "5s", 3, "10s"),
+    "caddy":                                (["CMD-SHELL", "caddy validate --config /etc/caddy/Caddyfile || exit 1"], "30s", "5s", 3, "10s"),
+    "headscale/headscale":                  (["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/speedtest-tracker": (["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"], "60s", "10s", 3, "60s"),
+    "jellyfin/jellyfin":                    (["CMD-SHELL", "curl -sf http://localhost:8096/health || exit 1"], "30s", "10s", 3, "60s"),
+    "jlesage/jdownloader-2":                (["CMD-SHELL", "curl -sf http://localhost:5800/ || exit 1"], "30s", "5s", 3, "60s"),
+    "juanfont/headscale":                   (["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/jellyfin":         (["CMD-SHELL", "curl -sf http://localhost:8096/health || exit 1"], "30s", "10s", 3, "60s"),
+    "lscr.io/linuxserver/bazarr":           (["CMD-SHELL", "curl -sf http://localhost:6767/api/ || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/readarr":          (["CMD-SHELL", "curl -sf http://localhost:8787/api/v1/system/status || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/lidarr":           (["CMD-SHELL", "curl -sf http://localhost:8686/api/v1/system/status || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/radarr":           (["CMD-SHELL", "curl -sf http://localhost:7878/api/v3/system/status || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/sonarr":           (["CMD-SHELL", "curl -sf http://localhost:8989/api/v3/system/status || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/prowlarr":         (["CMD-SHELL", "curl -sf http://localhost:9696/api/v1/system/status || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/jackett":          (["CMD-SHELL", "curl -sf http://localhost:9117/UI/Login || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/qbittorrent":      (["CMD-SHELL", "curl -sf http://localhost:8080/ || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/sabnzbd":          (["CMD-SHELL", "curl -sf http://localhost:8080/api?mode=version || exit 1"], "30s", "5s", 3, "30s"),
+    "lscr.io/linuxserver/jdownloader-2":    (["CMD-SHELL", "curl -sf http://localhost:5800/ || exit 1"], "30s", "5s", 3, "60s"),
+    "cauliflower/speedtest-tracker":        (["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"], "60s", "10s", 3, "60s"),
+    "alexjustesen/speedtest-tracker":       (["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"], "60s", "10s", 3, "60s"),
+    "henrywhitaker3/speedtest-tracker":     (["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"], "60s", "10s", 3, "60s"),
+    "adguard/adguardhome":                  (["CMD-SHELL", "wget -qO- http://localhost:3000 || exit 1"], "30s", "5s", 3, "20s"),
+    "containrrr/watchtower":                (["CMD-SHELL", "wget -qO- http://localhost:8080/ || exit 1"], "30s", "5s", 3, "30s"),
+    "amir20/dozzle":                        (["CMD-SHELL", "wget -qO- http://localhost:8080/healthcheck || exit 1"], "30s", "5s", 3, "20s"),
+}
+
+def probe_container(name):
+    """Exec into running container to find available tools and ports."""
+    tools = {}
+    for shell in ["/bin/sh", "/bin/bash", "/busybox/sh", "/usr/bin/sh"]:
+        try:
+            r = subprocess.run(["docker", "exec", name, shell, "-c", "echo ok"],
+                               capture_output=True, text=True, timeout=2)
+            if r.returncode == 0:
+                tools["shell"] = shell
+                break
+        except:
+            pass
+    if "shell" in tools:
+        sh = tools["shell"]
+        for tool in ["curl", "wget", "nc", "netcat", "ping", "ss", "netstat"]:
+            try:
+                r = subprocess.run(["docker", "exec", name, sh, "-c", f"which {tool} 2>/dev/null"],
+                                   capture_output=True, text=True, timeout=2)
+                if r.returncode == 0 and r.stdout.strip():
+                    tools[tool] = r.stdout.strip()
+            except:
+                pass
+    ports = []
+    if "shell" in tools:
+        sh = tools["shell"]
+        for cmd in ["ss -tlnp 2>/dev/null", "netstat -tlnp 2>/dev/null"]:
+            try:
+                r = subprocess.run(["docker", "exec", name, sh, "-c", cmd],
+                                   capture_output=True, text=True, timeout=5)
+                if r.returncode == 0:
+                    for line in r.stdout.splitlines():
+                        m = re.search(r":(\d+)\s", line)
+                        if m:
+                            p = int(m.group(1))
+                            if 0 < p < 65536 and p not in ports:
+                                ports.append(p)
+                    if ports:
+                        break
+            except:
+                pass
+    main_bin = None
     try:
-        out = subprocess.run(['docker','inspect',container],
-                             capture_output=True, text=True, timeout=10)
-        if out.returncode != 0 or not out.stdout.strip():
-            return None
-        data = json.loads(out.stdout)
-        if not data:
-            return None
-        c = data[0]
-        state = c.get('State', {})
-        if state.get('Status') != 'running':
-            return None  # nothing live to trust
+        r = subprocess.run(["docker", "inspect", name, "--format", "{{index .Config.Cmd 0}}"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            main_bin = r.stdout.strip()
+    except:
+        pass
+    return tools, sorted(ports), main_bin
 
-        # 1) Image already declares a healthcheck — reuse its test verbatim
-        hc = (c.get('Config', {}) or {}).get('Healthcheck') or {}
-        test = hc.get('Test') or []
-        if test and test != ['NONE']:
-            interval = _ns_to_s(hc.get('Interval')) or '15s'
-            timeout  = _ns_to_s(hc.get('Timeout'))  or '5s'
-            retries  = hc.get('Retries') or 5
-            start    = _ns_to_s(hc.get('StartPeriod')) or '30s'
-            return (list(test), interval, timeout, int(retries), start,
-                    "inspect:image-healthcheck")
+def hc_from_inspect(container, image=''):
+    """
+    Enhanced healthcheck detection:
+    1. Image knowledge base (exact/partial match)
+    2. Real container exec probing (tools + ports)
+    3. Returns None if nothing found
+    """
+    # 1. Image knowledge base — strip tag before matching
+    img_lower = (image or "").lower().split(':')[0]
+    # Also try with registry prefix stripped
+    img_base = img_lower.split('/')[-1] if '/' in img_lower else img_lower
+    for pattern, hc_tuple in IMAGE_HC_DB.items():
+        pat_lower = pattern.lower()
+        if pat_lower in img_lower or pat_lower == img_base:
+            cmd, interval, timeout, retries, start = hc_tuple
+            return (cmd, interval, timeout, retries, start, f"db:{pattern}")
 
-        # 2) Probe the first sensible exposed TCP port
-        exposed = (c.get('Config', {}) or {}).get('ExposedPorts') or {}
-        cand = []
-        for k in exposed:
-            mm = re.match(r'(\d+)/tcp', k)
-            if mm:
-                cand.append(int(mm.group(1)))
-        for port in sorted(cand):
-            return (['CMD-SHELL', f'wget -qO- http://localhost:{port}/ '
-                                  f'|| curl -sf http://localhost:{port}/ || exit 1'],
-                    '15s','5s',5,'45s', f"inspect:port-{port}")
-    except Exception:
+    # 2. Check container is running
+    try:
+        r = subprocess.run(["docker", "inspect", container, "--format", "{{.State.Status}}"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0 or r.stdout.strip() != "running":
+            return None
+    except:
         return None
+
+    # 3. Real exec probing
+    tools, ports, main_bin = probe_container(container)
+
+    # Distroless — no shell available
+    if "shell" not in tools:
+        if main_bin:
+            return (["CMD", main_bin, "--version"], "30s", "5s", 3, "10s", "probe:distroless")
+        return None
+
+    # Has shell — build from available tools and ports
+    web_ports = [p for p in ports if p in [80, 81, 443, 3000, 3001, 8000, 8080, 8443, 9000, 9090, 9091]]
+    if web_ports:
+        port = web_ports[0]
+        if "curl" in tools:
+            return (["CMD-SHELL", f"curl -sf http://localhost:{port}/ || exit 1"],
+                    "30s", "10s", 3, "30s", f"probe:curl-{port}")
+        if "wget" in tools:
+            return (["CMD-SHELL", f"wget -qO- http://localhost:{port}/ || exit 1"],
+                    "30s", "10s", 3, "30s", f"probe:wget-{port}")
+    if ports and "nc" in tools:
+        port = ports[0]
+        return (["CMD-SHELL", f"nc -z localhost {port} || exit 1"],
+                "30s", "5s", 3, "20s", f"probe:nc-{port}")
+    if "curl" in tools:
+        return (["CMD-SHELL", "curl -sf http://localhost/ || exit 1"],
+                "30s", "5s", 3, "30s", "probe:curl-generic")
+    if "wget" in tools:
+        return (["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"],
+                "30s", "5s", 3, "30s", "probe:wget-generic")
     return None
 
 def _ns_to_s(ns):
@@ -302,7 +422,7 @@ def _ns_to_s(ns):
 def choose_healthcheck(svc, deep_inspect):
     """Deep-inspect running container first, then pattern/port/generic."""
     if deep_inspect and svc['name']:
-        res = hc_from_inspect(svc['name'])
+        res = hc_from_inspect(svc['name'], svc.get('image', ''))
         if res:
             return res
     return hc_from_pattern(svc['image'], svc['ports'])
@@ -350,7 +470,13 @@ def parse_services_with_positions(path):
             continue
 
         m = re.match(r'^  ([a-zA-Z0-9][a-zA-Z0-9_.\-]*):\s*$', stripped)
-        if m and not m.group(1).startswith('x-'):
+        # Skip YAML anchor keys that appear at service indent but aren't services
+        _anchor_keys = {'cap_add','sysctls','tmpfs','security_opt','dns',
+                        'volumes','networks','ports','environment','labels',
+                        'devices','ulimits','logging','deploy','secrets',
+                        'configs','build','command','entrypoint','depends_on',
+                        'healthcheck','restart','image','container_name'}
+        if m and not m.group(1).startswith('x-') and m.group(1) not in _anchor_keys:
             if current:
                 current['block_end'] = i - 1
                 services.append(current)
@@ -387,6 +513,42 @@ def parse_services_with_positions(path):
         services.append(current)
 
     return services, lines
+
+
+def replace_hc_in_service(lines, svc, hc_tuple):
+    """Replace an existing healthcheck block in a service with a new one."""
+    hc_cmd, interval, timeout_s, retries, start, source = hc_tuple
+    new_hc_text = format_healthcheck(hc_cmd, interval, timeout_s, retries, start)
+    result = list(lines)
+    # Find the healthcheck block inside this service
+    in_service = False
+    hc_start = None
+    hc_end = None
+    for i, line in enumerate(lines):
+        if i == svc['block_start']:
+            in_service = True
+        if in_service and i > svc['block_start']:
+            stripped = line.strip()
+            if re.match(r'^[a-zA-Z0-9]', line) and not line.startswith(' '):
+                break
+            if re.match(r'^  [a-zA-Z0-9]', line) and not line.startswith('    '):
+                if hc_start is not None:
+                    hc_end = i
+                    break
+            if stripped.startswith('healthcheck:'):
+                hc_start = i
+            elif hc_start is not None and stripped and not stripped.startswith('healthcheck'):
+                indent = len(line) - len(line.lstrip())
+                if indent <= 4:
+                    hc_end = i
+                    break
+    if hc_start is None:
+        return lines, False
+    if hc_end is None:
+        hc_end = svc['block_end'] + 1
+    # Replace the block
+    result[hc_start:hc_end] = (new_hc_text + '\n').splitlines(keepends=True)
+    return result, True
 
 def inject_hc_into_service(lines, svc, deep_inspect):
     """Insert a healthcheck. Caller guarantees svc has none. Returns (lines, note)."""
@@ -764,7 +926,7 @@ def heal_creator_typos(path, dry_run):
     return 0
 
 # ── Healthcheck pass on one file ───────────────────────────────────────────────
-def fix_healthchecks(path, cfg, target_svc, dry_run):
+def fix_healthchecks(path, cfg, target_svc, dry_run, replace_broken=False):
     deep = on(cfg["FIX_DEEP_INSPECT"])
     skip = set(cfg["FIX_HC_SKIP"].split())
     services, lines = parse_services_with_positions(path)
@@ -783,7 +945,37 @@ def fix_healthchecks(path, cfg, target_svc, dry_run):
             pr(f"  {C}  {svc['name']}: in skip-list, leaving alone{X}")
             continue
         if svc['has_healthcheck']:
-            pr(f"  {C}  {svc['name']}: already has healthcheck — NOT touched{X}")
+            # Check if we should replace actively-failing healthchecks
+            _replaced = False
+            if replace_broken and svc['name']:
+                try:
+                    _ri = subprocess.run(
+                        ["docker", "inspect", svc['name'], "--format",
+                         "{{if .State.Health}}{{.State.Health.Status}}|{{.State.Health.FailingStreak}}{{end}}"],
+                        capture_output=True, text=True, timeout=5)
+                    _parts = (_ri.stdout.strip() or "|0").split("|")
+                    _hc_status = _parts[0] if _parts else ""
+                    _failing = int(_parts[1] if len(_parts) > 1 else "0")
+                    if _hc_status == "unhealthy" or _failing > 0:
+                        _new_hc = hc_from_inspect(svc['name'], svc.get('image', ''))
+                        if not _new_hc:
+                            _new_hc = hc_from_pattern(svc.get('image', ''), svc.get('ports', []))
+                        if _new_hc:
+                            if dry_run:
+                                pr(f"  {Y}  [dry-run] BROKEN HC on {svc['name']} (failing:{_failing}) → {_new_hc[5]}{X}")
+                                changes += 1
+                                _replaced = True
+                            else:
+                                _lines2, _changed = replace_hc_in_service(lines, svc, _new_hc)
+                                if _changed:
+                                    lines = _lines2
+                                    pr(f"  {G}  ✔ {svc['name']}: broken HC replaced → {_new_hc[5]}{X}")
+                                    changes += 1
+                                    _replaced = True
+                except Exception as _e:
+                    pass
+            if not _replaced:
+                pr(f"  {C}  {svc['name']}: already has healthcheck — NOT touched{X}")
             continue
         if dry_run:
             _, src = choose_healthcheck(svc, deep), None
@@ -829,10 +1021,83 @@ def strip_profiles_from_file(filepath, dry_run=False):
         return True
     return False
 
+
+def remove_gaps_from_file(filepath, dry_run=False):
+    """
+    Remove blank lines inside service blocks and after art banners.
+    Blank lines between top-level sections (services:, networks:, volumes:) are kept.
+    """
+    try:
+        content = open(filepath).read()
+    except:
+        return False
+
+    lines = content.split('\n')
+    result = []
+    in_service_block = False
+    in_services_section = False
+    changed = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Track services: section
+        if re.match(r'^services:\s*$', line):
+            in_services_section = True
+            result.append(line)
+            continue
+
+        # Top-level keys end services section
+        if in_services_section and re.match(r'^[a-zA-Z]', line) and not line.startswith(' '):
+            in_services_section = False
+
+        # Track service block (2-space indent service name)
+        if in_services_section and re.match(r'^  [a-zA-Z0-9]', line):
+            in_service_block = True
+
+        # Remove blank lines inside service blocks
+        if in_service_block and stripped == '':
+            # Check if next non-blank line is still in a service block
+            next_content = ''
+            for j in range(i+1, min(i+5, len(lines))):
+                if lines[j].strip():
+                    next_content = lines[j]
+                    break
+            # Keep blank line if next line is a new top-level service or section
+            if next_content and re.match(r'^  [a-zA-Z0-9]', next_content):
+                # New service starting — keep one blank line as separator
+                result.append(line)
+            elif next_content and re.match(r'^[a-zA-Z#]', next_content):
+                # Top level — keep
+                result.append(line)
+            else:
+                # Inside service block — remove the blank line
+                changed = True
+                continue
+        else:
+            result.append(line)
+
+    new_content = '\n'.join(result)
+
+    # Also remove multiple consecutive blank lines in comment/header area (art banner gaps)
+    import re as _re
+    new_content2 = _re.sub(r'(^#.*$\n)\n(^#)', r'\1\2', new_content, flags=_re.MULTILINE)
+    if new_content2 != new_content:
+        new_content = new_content2
+        changed = True
+
+    if changed:
+        if not dry_run:
+            _backup(filepath)
+            open(filepath, 'w').write(new_content)
+        return True
+    return False
+
 def main():
-    args = [a for a in sys.argv[1:] if a != '--dry-run']
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
     dry_run = '--dry-run' in sys.argv[1:]
     cfg = load_conf()
+    replace_broken = '--replace-broken' in sys.argv[1:] or on(cfg.get('FIX_REPLACE_BROKEN_HC', '0'))
     sd = cfg["STACKS_DIR"]
 
     target = args[0] if args else 'all'
@@ -922,7 +1187,29 @@ def main():
         for f in files:
             stack_name = os.path.basename(f).replace('.yml', '').replace('.yaml', '')
             pr(f"\n{C}🔧 {stack_name}{X}")
-            total += fix_healthchecks(f, cfg, svc, dry_run)
+            total += fix_healthchecks(f, cfg, svc, dry_run, replace_broken)
+
+
+    # ── Phase 4: remove blank lines inside service blocks ──
+    if on(cfg.get("FIX_REMOVE_GAPS", "1")):
+        pr(f"\n{C}🧹 Removing gaps in service blocks{X}")
+        _gaps_fixed = 0
+        for f in _files:
+            if dry_run:
+                try:
+                    content = open(f).read()
+                    if '\n\n' in content:
+                        pr(f"  {Y}[dry-run] would remove gaps from {os.path.basename(f)}{X}")
+                        _gaps_fixed += 1
+                except:
+                    pass
+            else:
+                if remove_gaps_from_file(f, False):
+                    pr(f"  {G}✔ {os.path.basename(f)}: gaps removed{X}")
+                    _gaps_fixed += 1
+        if _gaps_fixed == 0:
+            pr(f"  {G}✔ No gaps found{X}")
+        total += _gaps_fixed
 
     pr(f"\n{G}✨ Done — {total} change(s){'(dry-run, none written)' if dry_run else ''}{X}\n")
 
