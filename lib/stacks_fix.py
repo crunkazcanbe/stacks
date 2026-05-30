@@ -1418,33 +1418,76 @@ def inject_network_into_service(lines, svc, net_name, priority, dry_run=False):
 
 
 def ensure_network_declared(lines, net_name, subnet=None):
-    """Ensure network is declared in the networks: section at bottom of file."""
-    # Check if already declared
+    """Check if network is declared in these lines — does NOT add it here.
+    Adding is done by ensure_network_in_creator_file() instead."""
     for line in lines:
         if re.match(rf'^  {re.escape(net_name)}:', line.rstrip()):
             return lines, False
+    # Not found in this file — signal that creator file needs updating
+    return lines, True
 
-    # Find top-level networks: block
+def ensure_network_in_creator_file(net_name, stacks_dir, subnet_base="10.50"):
+    """Add network declaration to the appropriate creator file."""
+    creators = discover_creator_files(stacks_dir)
+    
+    # Check if network already declared in any creator file
+    for cpath, cdata in creators.items():
+        if net_name in cdata.get("nets", {}):
+            return False  # already exists
+    
+    # Also check all files for this network name
+    for f in os.listdir(stacks_dir):
+        if not (f.endswith('.yml') or f.endswith('.yaml')):
+            continue
+        fpath = os.path.join(stacks_dir, f)
+        content = open(fpath).read()
+        if re.search(rf'^  {re.escape(net_name)}:', content, re.MULTILINE):
+            return False  # already declared somewhere
+    
+    # Find target creator file
+    if creators:
+        # Use smallest creator file
+        target = min(creators.keys(), key=lambda p: os.path.getsize(p))
+    else:
+        target = smallest_file_overall(stacks_dir)
+    
+    if not target:
+        return False
+    
+    # Get next available subnet
+    used = all_used_subnets(creators, subnet_base)
+    octet = next_subnet_octet(used)
+    subnet = f"{subnet_base}.{octet}.0/24"
+    gateway = f"{subnet_base}.{octet}.1"
+    
+    prefix = net_name.replace('_net', '')
+    new_entry = (
+        f"  {net_name}: {{name: {net_name}, driver: bridge, "
+        f"attachable: true, external: false, internal: false, "
+        f"enable_ipv6: false, "
+        f"labels: [\"com.stacks.network={prefix}\", "
+        f"\"com.stacks.env=production\"], "
+        f"ipam: {{driver: default, "
+        f"config: [{{subnet: {{}}, gateway: {{}}}}]}}}}}}"
+    ).format(subnet, gateway)
+    
+    # Add to creator file's networks: section
+    lines = open(target).readlines()
+    new_lines = list(lines)
     net_section = None
     for i, line in enumerate(lines):
         if re.match(r'^networks:\s*$', line.rstrip()):
             net_section = i
             break
-
-    new_entry = f"  {net_name}: {{driver: bridge, external: false}}"
-    if subnet:
-        new_entry = (f"  {net_name}: {{name: {net_name}, driver: bridge, "
-                    f"external: false, ipam: {{driver: default, "
-                    f"config: [{{subnet: {subnet}}}]}}}}")
-
-    new_lines = list(lines)
+    
     if net_section is not None:
-        new_lines.insert(net_section + 1, new_entry)
+        new_lines.insert(net_section + 1, new_entry + chr(10))
     else:
-        new_lines.append("networks:")
-        new_lines.append(new_entry)
-
-    return new_lines, True
+        new_lines.append("networks:" + chr(10))
+        new_lines.append(new_entry + chr(10))
+    
+    open(target, 'w').writelines(new_lines)
+    return True
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]

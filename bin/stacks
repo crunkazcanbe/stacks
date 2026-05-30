@@ -251,6 +251,7 @@ init_ui() {
   echo ""
   echo ""
   echo ""
+  echo ""
   printf "\033[3A"
 }
 
@@ -2481,6 +2482,57 @@ elif [ "$COMMAND" == "search" ]; then
 
 elif [ "$COMMAND" == "art" ]; then
   _art_action="${TARGET_ARGS[0]:-}"
+
+  # ── Dynamic file art: stacks art dynamic inject/strip [target|all] ──
+  if [[ "$_art_action" == "dynamic" ]]; then
+    _dyn_subcmd="${TARGET_ARGS[1]:-}"
+    _dyn_target="${TARGET_ARGS[2]:-all}"
+    _dyn_dir="${DYNAMICS_DIR:-/srv/stacks/Configs/Dynamics}"
+    _ba_conf="~/.config/stacks/art.conf"
+    if [[ ! "$_dyn_subcmd" =~ ^(inject|strip)$ ]]; then
+      printf "\e[?25h"
+      echo -e "\e[1;31m✘ Usage: stacks art dynamic inject|strip [all|filename]\e[0m"
+      exit 1
+    fi
+    source "$_ba_conf" 2>/dev/null
+    if [[ "$_dyn_target" == "all" || "$_dyn_target" == "--all" ]]; then
+      _dyn_files=($(ls "$_dyn_dir"/*.yml "$_dyn_dir"/*.yaml 2>/dev/null))
+    else
+      if [ -f "$_dyn_target" ]; then _dyn_files=("$_dyn_target")
+      elif [ -f "$_dyn_dir/$_dyn_target" ]; then _dyn_files=("$_dyn_dir/$_dyn_target")
+      elif [ -f "$_dyn_dir/$_dyn_target.yml" ]; then _dyn_files=("$_dyn_dir/$_dyn_target.yml")
+      else echo -e "\e[1;31m✘ Not found: $_dyn_target\e[0m"; exit 1; fi
+    fi
+    _dyn_total=${#_dyn_files[@]}
+    if [ $_dyn_total -le 0 ]; then
+      clear_ui; printf "\e[?25h"
+      echo -e "\e[1;33m⚠ No dynamic files found\e[0m"; exit 0
+    fi
+    CURRENT_STACK="Art Engine"
+    CURRENT_SERVICE="Processing"
+    for i in "${!_dyn_files[@]}"; do
+      _df="${_dyn_files[$i]}"
+      _dfname=$(basename "$_df")
+      pct=$(( (i * 100) / _dyn_total ))
+      if [[ "$_dyn_subcmd" == "inject" ]]; then
+        update_ui "🎨 Injected beautifully ➜ $_dfname" "$pct"
+      else
+        update_ui "🧹 Stripped clean ➜ $_dfname" "$pct"
+      fi
+      python3 /usr/local/lib/stacks_inject_dynamic.py "$_dyn_subcmd" "$_df" "$_dyn_dir" >/dev/null 2>&1
+      sleep 0.12
+    done
+    update_ui "✨ Dynamic art $_dyn_subcmd complete!" "100"
+    sleep 1.5
+    clear_ui
+    printf "\e[?25h"
+    if [[ "$_dyn_subcmd" == "inject" ]]; then
+      echo -e "\e[1;32m✨ SUCCESS: Art injected into $_dyn_total dynamic file(s)\e[0m"
+    else
+      echo -e "\e[1;32m✨ SUCCESS: Art stripped from $_dyn_total dynamic file(s)\e[0m"
+    fi
+    exit 0
+  fi
   # Parse: stacks art inject [all|art|urls|desc] [target]
   # or:    stacks art inject [target]
   _arg1="${TARGET_ARGS[1]:-all}"
@@ -2498,7 +2550,7 @@ elif [ "$COMMAND" == "art" ]; then
   fi
 
   # Call your UI Engine layouts natively
-  init_ui
+  reinit_ui 2>/dev/null || true
   CURRENT_STACK="Art Engine"
   CURRENT_SERVICE="Processing"
   
