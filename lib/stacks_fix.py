@@ -1674,7 +1674,7 @@ def main():
     do_compose_net = on(cfg.get("FIX_AUTO_COMPOSE_NETWORK", "0"))
     compose_net_pri = int(cfg.get("FIX_AUTO_COMPOSE_NETWORK_PRIORITY", "200"))
 
-    if auto_nets or do_link or do_compose_net:
+    if False and (auto_nets or do_link or do_compose_net):  # DISABLED: needs fixing
         pr(f"\n{C}🌐 Network auto-injection{X}")
         _net_changes = 0
 
