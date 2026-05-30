@@ -27,6 +27,160 @@ if [ -f "$STACKS_CONF" ]; then
   source "$STACKS_CONF"
 fi
 
+# ── Auto-generate missing config files ────────────────────────────────────────
+_CONF_DIR="~/.config/stacks"
+mkdir -p "$_CONF_DIR"
+
+# stacks.conf
+if [ ! -f "$_CONF_DIR/stacks.conf" ]; then
+cat > "$_CONF_DIR/stacks.conf" << 'CONF_EOF'
+STACKS_DIR=/srv/stacks/Stacks
+DYNAMICS_DIR=/srv/stacks/Configs/Dynamics
+SNAPSHOT_DIR=/srv/stacks/Snapshots
+DOMAIN=example.com
+PRIMARY_NETWORK=apartment_net
+PRIMARY_SUBNET=172.20.0
+SABLIER_SCALE_ENABLED=1
+FIX_REPLACE_BROKEN_HC=1
+FIX_REMOVE_GAPS=1
+FIX_STRIP_PROFILES=1
+FIX_CONVERT_NAMED_TO_BIND=1
+FIX_VOLUME_BASE=/srv/stacks/docker
+FIX_CREATE_VOLUME_DIRS=1
+FIX_AUTO_NETWORKS=traefik_net
+FIX_AUTO_NETWORK_PRIORITY=1000
+FIX_AUTO_LINK_NETWORKS=1
+FIX_AUTO_LINK_PRIORITY=500
+FIX_AUTO_COMPOSE_NETWORK=0
+FIX_AUTO_COMPOSE_NETWORK_PRIORITY=200
+FIX_AUTO_DEPENDS_ON=1
+CONF_EOF
+fi
+
+# art.conf
+if [ ! -f "$_CONF_DIR/art.conf" ]; then
+cat > "$_CONF_DIR/art.conf" << 'CONF_EOF'
+# ==============================================================================
+# art.conf — Art injection config for stacks inject/strip
+# Leave variables empty ("") to skip that section.
+# STACKS_ART_ markers let the strip command find and remove blocks.
+# ==============================================================================
+DEFAULT_STACKS_DIR=/srv/stacks/Stacks
+
+_ba_header='##STACKS_ART_START_HEADER
+##STACKS_ART_END_HEADER'
+
+_ba_footer='##STACKS_ART_START_FOOTER
+##STACKS_ART_END_FOOTER'
+
+_ba_xcaps='##STACKS_ART_START_XCAPS
+##STACKS_ART_END_XCAPS'
+
+_ba_networks='##STACKS_ART_START_NETWORKS
+##STACKS_ART_END_NETWORKS'
+
+_ba_volumes='##STACKS_ART_START_VOLUMES
+##STACKS_ART_END_VOLUMES'
+
+_ba_services='##STACKS_ART_START_SERVICES
+##STACKS_ART_END_SERVICES'
+CONF_EOF
+fi
+
+# stack_urls.conf
+if [ ! -f "$_CONF_DIR/stack_urls.conf" ]; then
+cat > "$_CONF_DIR/stack_urls.conf" << 'CONF_EOF'
+# ==============================================================================
+# stack_urls.conf — Service URLs injected by stacks art inject
+# Format: [stack_name] section with URL=label pairs
+# ==============================================================================
+# Example:
+# [net_2]
+# https://traefik.yourdomain.com=Traefik Dashboard
+# https://auth.yourdomain.com=Authelia SSO
+CONF_EOF
+fi
+
+# global_inject.conf
+if [ ! -f "$_CONF_DIR/global_inject.conf" ]; then
+cat > "$_CONF_DIR/global_inject.conf" << 'CONF_EOF'
+# ==============================================================================
+# global_inject.conf — Keys injected into every service by stacks fix
+# Values: 0=disabled, 1=add-only, force=always override
+# _FORCE=1 forces individual key. FORCE_ALL=1 forces everything.
+# Anchor keys → x-common-caps block. Service keys → each service.
+# ==============================================================================
+FORCE_ALL=0
+INJECT_STOP_GRACE=1
+INJECT_STOP_GRACE_FORCE=0
+STOP_GRACE_PERIOD=120s
+STOP_SIGNAL=SIGTERM
+INJECT_LOGGING=1
+INJECT_LOGGING_FORCE=0
+LOGGING_DRIVER=json-file
+LOGGING_MAX_SIZE=50m
+LOGGING_MAX_FILE=5
+INJECT_RESTART=0
+INJECT_RESTART_FORCE=0
+RESTART_POLICY=unless-stopped
+INJECT_DEPLOY=0
+INJECT_DEPLOY_FORCE=0
+DEPLOY_MEMORY_LIMIT=2G
+DEPLOY_CPU_LIMIT=0.20
+DEPLOY_MEMORY_RESERVATION=256M
+INJECT_BLKIO=0
+INJECT_BLKIO_FORCE=0
+BLKIO_WEIGHT=500
+BLKIO_READ_BPS=750mb
+BLKIO_WRITE_BPS=750mb
+INJECT_ULIMITS=0
+INJECT_ULIMITS_FORCE=0
+ULIMIT_NOFILE_SOFT=65535
+ULIMIT_NOFILE_HARD=65535
+ULIMIT_NPROC=65535
+[custom_anchor]
+[/custom_anchor]
+[custom_service]
+[/custom_service]
+CONF_EOF
+fi
+
+# menu.conf
+if [ ! -f "$_CONF_DIR/menu.conf" ]; then
+cat > "$_CONF_DIR/menu.conf" << 'CONF_EOF'
+{}
+CONF_EOF
+fi
+
+# backup.conf
+if [ ! -f "$_CONF_DIR/backup.conf" ]; then
+cat > "$_CONF_DIR/backup.conf" << 'CONF_EOF'
+# ==============================================================================
+# backup.conf — Backup configuration for stacks backup
+# ==============================================================================
+BACKUP_DEST=/srv/stacks/backups
+FILES=(
+  /usr/local/bin/stacks
+  /usr/local/lib/stacks_fix.py
+  /usr/local/lib/stacks_inject.py
+  /usr/local/lib/stacks_describe.py
+  /usr/local/lib/stacks_inject_dynamic.py
+)
+FOLDERS=()
+CONF_EOF
+fi
+
+# build.conf
+if [ ! -f "$_CONF_DIR/build.conf" ]; then
+cat > "$_CONF_DIR/build.conf" << 'CONF_EOF'
+# ==============================================================================
+# build.conf — Default values for stacks build command
+# ==============================================================================
+BUILD_STACKS_DIR=/srv/stacks/Stacks
+BUILD_AUTHOR=stacks
+CONF_EOF
+fi
+
 export COMPOSE_PROGRESS=plain
 export DOCKER_CLI_HINTS=false
 export DOCKER_CLIENT_TIMEOUT=120
@@ -61,7 +215,7 @@ CONTINUE_COUNT=-1
 
 for arg in "$@"; do
   # Catch the primary action command first
-  if [ -z "$COMMAND" ] && [[ "${arg,,}" =~ ^(up|down|start|stop|restart|rm|snapshot|get|kill|ls|status|logs|inspect|pull|build|volume|network|dynamics|reload|clean|search|regsearch|inject|strip|art|backup|describe|gen|fix|custom)$ ]]; then
+  if [ -z "$COMMAND" ] && [[ "${arg,,}" =~ ^(up|down|start|stop|restart|rm|snapshot|get|kill|ls|status|logs|inspect|pull|build|volume|network|dynamics|reload|clean|search|regsearch|inject|strip|art|backup|describe|gen|fix|custom|scale)$ ]]; then
      COMMAND="${arg,,}"
      continue
   fi
@@ -194,7 +348,7 @@ if [ "$DO_ATTACH" -eq 1 ]; then
   fi
 fi
 
-if [ -n "$TARGET_STACK" ] && [ ! -f "$STACKS_DIR/$TARGET_STACK.yml" ] && [[ ! "$COMMAND" =~ ^(regsearch|get|kill|status|ls|clean|reload|search|build|pull|logs|inspect|volume|network|dynamics|inject|strip|art|backup|gen|fix)$ ]]; then
+if [ -n "$TARGET_STACK" ] && [ ! -f "$STACKS_DIR/$TARGET_STACK.yml" ] && [[ ! "$COMMAND" =~ ^(regsearch|get|kill|status|ls|clean|reload|search|build|pull|logs|inspect|volume|network|dynamics|inject|strip|art|backup|gen|fix|scale)$ ]]; then
   printf "\e[?25h"
   echo -e "\e[1;31m✘ Error: Stack $TARGET_STACK.yml not found in $STACKS_DIR\e[0m"
   exit 1
@@ -2856,9 +3010,15 @@ if svc == "__all__":
     # Replace all sablier.enable values
     new = re.sub(r'sablier\.enable=(true|false)', f'sablier.enable={val}', content)
     if new != content:
-        changed = content.count('sablier.enable=') 
+        changed = content.count('sablier.enable=')
         content = new
-    
+
+    # Replace all traefik.enable values
+    new2 = re.sub(r'traefik\.enable=(true|false)', f'traefik.enable={val}', content)
+    if new2 != content:
+        changed += content.count('traefik.enable=')
+        content = new2
+
     # Add sablier labels to services that don't have them
     services_without = []
     in_svc = False
@@ -2885,6 +3045,7 @@ if svc == "__all__":
                     insert_at += 1
                 lines.insert(insert_at, f'      - "sablier.enable={val}"')
                 lines.insert(insert_at+1, f'      - "sablier.group=auto"')
+                lines.insert(insert_at, f'      - "traefik.enable={val}"')
                 changed += 1
         i += 1
     content = "\n".join(out)
@@ -2898,14 +3059,15 @@ else:
     block = content[idx:block_end]
     if 'sablier.enable' in block:
         new_block = re.sub(r'sablier\.enable=(true|false)', f'sablier.enable={val}', block)
+        new_block = re.sub(r'traefik\.enable=(true|false)', f'traefik.enable={val}', new_block)
         content = content[:idx] + new_block + content[block_end:]
         changed = 1
     else:
-        # Add sablier labels
+        # Add sablier and traefik labels
         label_idx = block.find('labels:')
         if label_idx >= 0:
             insert = block.find('\n', label_idx + len('labels:'))
-            new_block = block[:insert] + f'\n      - "sablier.enable={val}"\n      - "sablier.group=auto"' + block[insert:]
+            new_block = block[:insert] + f'\n      - "traefik.enable={val}"\n      - "sablier.enable={val}"\n      - "sablier.group=auto"' + block[insert:]
             content = content[:idx] + new_block + content[block_end:]
             changed = 1
 
@@ -2917,31 +3079,49 @@ else:
 PYEOF
   }
 
+  # Build file list for UI
+  _scale_files=()
   case "$_scale_mode" in
     all)
-      echo -e "\e[1;36m⚡ Sablier scale ${_scale_state^^} — ALL stacks\e[0m"
-      for _sf in "$STACKS_DIR"/*.yml; do
-        _do_scale_file "$_sf" "__all__" "$_scale_val"
-        _scale_changed=$((_scale_changed+1))
-      done
-      ;;
+      for _sf in "$STACKS_DIR"/*.yml; do _scale_files+=("$_sf"); done ;;
     stack)
       if [ ! -f "$STACKS_DIR/$_scale_stack.yml" ]; then
         echo -e "\e[1;31m✘ Stack not found: $_scale_stack\e[0m"; exit 1
       fi
-      echo -e "\e[1;36m⚡ Sablier scale ${_scale_state^^} — stack: $_scale_stack\e[0m"
-      _do_scale_file "$STACKS_DIR/$_scale_stack.yml" "__all__" "$_scale_val"
-      ;;
+      _scale_files=("$STACKS_DIR/$_scale_stack.yml") ;;
     service)
       if [ ! -f "$STACKS_DIR/$_scale_stack.yml" ]; then
         echo -e "\e[1;31m✘ Stack not found: $_scale_stack\e[0m"; exit 1
       fi
-      echo -e "\e[1;36m⚡ Sablier scale ${_scale_state^^} — $_scale_stack/$_scale_svc\e[0m"
-      _do_scale_file "$STACKS_DIR/$_scale_stack.yml" "$_scale_svc" "$_scale_val"
-      ;;
+      _scale_files=("$STACKS_DIR/$_scale_stack.yml") ;;
   esac
 
-  echo -e "\n\e[1;32m✔ Scale ${_scale_state^^} applied. Run 'stacks up <stack> recreate' to apply changes.\e[0m"
+  _scale_total=${#_scale_files[@]}
+  CURRENT_STACK="Scale Engine"
+  CURRENT_SERVICE="Initializing..."
+  for i in "${!_scale_files[@]}"; do
+    _sf="${_scale_files[$i]}"
+    _sfname=$(basename "$_sf" .yml)
+    pct=$(( (i * 100) / _scale_total ))
+    CURRENT_STACK="$_sfname"
+    if [ "$_scale_mode" == "service" ]; then
+      CURRENT_SERVICE="$_scale_svc"
+      update_ui "$([ "$_scale_state" == "on" ] && echo "✅" || echo "⏸️") Scale ${_scale_state^^} ➜ $_sfname/$_scale_svc" "$pct"
+      _do_scale_file "$_sf" "$_scale_svc" "$_scale_val"
+    else
+      CURRENT_SERVICE="All Services"
+      update_ui "$([ "$_scale_state" == "on" ] && echo "✅" || echo "⏸️") Scale ${_scale_state^^} ➜ $_sfname" "$pct"
+      _do_scale_file "$_sf" "__all__" "$_scale_val"
+    fi
+    _scale_changed=$((_scale_changed+1))
+    sleep 0.08
+  done
+
+  update_ui "✨ Scale ${_scale_state^^} complete on $_scale_changed file(s)!" "100"
+  sleep 1.5
+  clear_ui
+  printf "\e[?25h"
+  echo -e "\e[1;32m✨ SUCCESS: Scale ${_scale_state^^} applied to $_scale_changed stack(s). Run 'stacks up <stack> recreate' to deploy.\e[0m"
   exit 0
 
 # ---------------------------------------------------------

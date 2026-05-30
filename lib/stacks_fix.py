@@ -1398,7 +1398,7 @@ def inject_network_into_service(lines, svc, net_name, priority, dry_run=False):
     """Add a network to a service block if not already present."""
     # Check if network already in service
     block = lines[svc['block_start']:svc['block_end']+1]
-    block_text = '\n'.join(block)
+    block_text = chr(10).join(block)
     if net_name in block_text:
         return lines, False
     # Skip services using network_mode: service:* (they share another container's network)
@@ -1542,6 +1542,222 @@ def ensure_network_in_creator_file(net_name, stacks_dir, subnet_base="10.50"):
     
     open(target, 'w').writelines(new_lines)
     return True
+
+def load_global_inject_conf():
+    """Load global inject settings from global_inject.conf."""
+    conf_path = os.path.expanduser("~/.config/stacks/global_inject.conf")
+    if not os.path.exists(conf_path):
+        return {}
+    cfg = {}
+    with open(conf_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                k, v = line.split('=', 1)
+                cfg[k.strip()] = v.strip()
+    return cfg
+
+def _gi_enabled(val):
+    """Return True if value is '1' or 'force'."""
+    return str(val).lower() in ('1', 'force', 'true')
+
+def _gi_force(val):
+    """Return True only if value is 'force'."""
+    return str(val).lower() == 'force'
+
+def _gi_is_forced(gi, key):
+    """Check if a key is forced via FORCE_ALL or individual _FORCE flag."""
+    if on(gi.get('FORCE_ALL', '0')):
+        return True
+    return on(gi.get(key + '_FORCE', '0'))
+
+
+def inject_into_anchor(lines, gi, dry_run=False):
+    """Inject anchor-targeted keys into x-common-caps block."""
+    # Find anchor block start
+    anchor_start = None
+    anchor_end = None
+    for i, line in enumerate(lines):
+        if re.match(r'^x-common-caps:', line):
+            anchor_start = i
+            continue
+        if anchor_start is not None and anchor_end is None:
+            # End of anchor: next top-level key
+            if line and not line[0].isspace() and not line.startswith('#'):
+                anchor_end = i
+                break
+    if anchor_start is None:
+        return lines, 0
+    if anchor_end is None:
+        anchor_end = len(lines)
+
+    block = lines[anchor_start:anchor_end]
+    block_text = chr(10).join(block)
+    new_lines = list(lines)
+    changes = 0
+    inserts = []
+    # Insert before dns: or restart: or at end of anchor
+    insert_at = anchor_end
+    for i in range(anchor_start, anchor_end):
+        if re.match(r'^  (dns|restart|stop_grace):', lines[i]):
+            insert_at = i
+            break
+
+    _sg = gi.get('INJECT_STOP_GRACE','0')
+    if _gi_enabled(_sg):
+        force = _gi_is_forced(gi, INJECT_STOP_GRACE)
+        period = gi.get('STOP_GRACE_PERIOD','120s')
+        signal = gi.get('STOP_SIGNAL','SIGTERM')
+        if force and 'stop_grace_period:' in block_text:
+            new_lines = [re.sub(r'^  stop_grace_period:.*', f"  stop_grace_period: {period}", l) for l in new_lines]
+            changes += 1
+        elif 'stop_grace_period:' not in block_text:
+            inserts.append(f"  stop_grace_period: {period}")
+            changes += 1
+        if force and 'stop_signal:' in block_text:
+            new_lines = [re.sub(r'^  stop_signal:.*', f"  stop_signal: {signal}", l) for l in new_lines]
+            changes += 1
+        elif 'stop_signal:' not in block_text:
+            inserts.append(f"  stop_signal: {signal}")
+            changes += 1
+
+    _lg = gi.get('INJECT_LOGGING','0')
+    if _gi_enabled(_lg):
+        force = _gi_is_forced(gi, INJECT_LOGGING)
+        driver = gi.get('LOGGING_DRIVER','json-file')
+        maxsize = gi.get('LOGGING_MAX_SIZE','50m')
+        maxfile = gi.get('LOGGING_MAX_FILE','5')
+        log_line = f"  logging: {{driver: {driver}, options: {{max-size: {maxsize}, max-file: '{maxfile}'}}}}"
+        if force and 'logging:' in block_text:
+            new_lines = [log_line if re.match(r'^  logging:', l) else l for l in new_lines]
+            changes += 1
+        elif 'logging:' not in block_text:
+            inserts.append(log_line)
+            changes += 1
+
+    _rs = gi.get('INJECT_RESTART','0')
+    if _gi_enabled(_rs):
+        force = _gi_is_forced(gi, INJECT_RESTART)
+        policy = gi.get('RESTART_POLICY','unless-stopped')
+        if force and 'restart:' in block_text:
+            new_lines = [re.sub(r'^  restart:.*', f"  restart: {policy}", l) for l in new_lines]
+            changes += 1
+        elif 'restart:' not in block_text:
+            inserts.append(f"  restart: {policy}")
+            changes += 1
+
+    if inserts and not dry_run:
+        for ins in reversed(inserts):
+            new_lines.insert(insert_at, ins)
+
+    return new_lines, changes
+
+def inject_global_keys(lines, svc, gi, dry_run=False):
+    """Inject global keys into a service block. Add-only unless force mode."""
+    block = lines[svc['block_start']:svc['block_end']+1]
+    block_text = chr(10).join(block)
+    new_lines = list(lines)
+    changes = 0
+    insert_before = svc['block_end']
+
+    for i in range(svc['block_start'], min(svc['block_end']+1, len(lines))):
+        if re.match(r'^    (blkio_config|deploy|labels|healthcheck):', lines[i]):
+            insert_before = i
+            break
+
+    inserts = []
+
+    _sg = gi.get('INJECT_STOP_GRACE','0')
+    if _gi_enabled(_sg):
+        force = _gi_is_forced(gi, INJECT_STOP_GRACE)
+        if force or 'stop_grace_period:' not in block_text:
+            if force:
+                new_lines = [re.sub(r'^    stop_grace_period:.*', f"    stop_grace_period: {gi.get('STOP_GRACE_PERIOD','120s')}", l) for l in new_lines]
+            else:
+                inserts.append(f"    stop_grace_period: {gi.get('STOP_GRACE_PERIOD','120s')}")
+            changes += 1
+        if force or 'stop_signal:' not in block_text:
+            if force:
+                new_lines = [re.sub(r'^    stop_signal:.*', f"    stop_signal: {gi.get('STOP_SIGNAL','SIGTERM')}", l) for l in new_lines]
+            else:
+                inserts.append(f"    stop_signal: {gi.get('STOP_SIGNAL','SIGTERM')}")
+            changes += 1
+
+    _lg = gi.get('INJECT_LOGGING','0')
+    if _gi_enabled(_lg):
+        force = _gi_is_forced(gi, INJECT_LOGGING)
+        driver = gi.get('LOGGING_DRIVER','json-file')
+        maxsize = gi.get('LOGGING_MAX_SIZE','50m')
+        maxfile = gi.get('LOGGING_MAX_FILE','5')
+        log_line = f"    logging: {{driver: {driver}, options: {{max-size: {maxsize}, max-file: '{maxfile}'}}}}"
+        if force or 'logging:' not in block_text:
+            if force and 'logging:' in block_text:
+                new_lines = [log_line if re.match(r'^    logging:', l) else l for l in new_lines]
+            else:
+                inserts.append(log_line)
+            changes += 1
+
+    _dp = gi.get('INJECT_DEPLOY','0')
+    if _gi_enabled(_dp):
+        force = _gi_force(_dp)
+        mem = gi.get('DEPLOY_MEMORY_LIMIT','2G')
+        cpu = gi.get('DEPLOY_CPU_LIMIT','0.20')
+        res = gi.get('DEPLOY_MEMORY_RESERVATION','256M')
+        dep_line = f"    deploy: {{resources: {{limits: {{memory: {mem}, cpus: '{cpu}'}}, reservations: {{memory: {res}}}}}}}"
+        if force or 'deploy:' not in block_text:
+            if force and 'deploy:' in block_text:
+                new_lines = [dep_line if re.match(r'^    deploy:', l) else l for l in new_lines]
+            else:
+                inserts.append(dep_line)
+            changes += 1
+
+    _bk = gi.get('INJECT_BLKIO','0')
+    if _gi_enabled(_bk):
+        force = _gi_force(_bk)
+        w = gi.get('BLKIO_WEIGHT','500')
+        r = gi.get('BLKIO_READ_BPS','750mb')
+        wr = gi.get('BLKIO_WRITE_BPS','750mb')
+        blk_line = f"    blkio_config: {{weight: {w}, device_read_bps: [{{path: /dev/nvme0n1, rate: {r}}}], device_write_bps: [{{path: /dev/nvme0n1, rate: {wr}}}]}}"
+        if force or 'blkio_config:' not in block_text:
+            if force and 'blkio_config:' in block_text:
+                new_lines = [blk_line if re.match(r'^    blkio_config:', l) else l for l in new_lines]
+            else:
+                inserts.append(blk_line)
+            changes += 1
+
+    _ul = gi.get('INJECT_ULIMITS','0')
+    if _gi_enabled(_ul):
+        force = _gi_force(_ul)
+        ns = gi.get('ULIMIT_NOFILE_SOFT','65535')
+        nh = gi.get('ULIMIT_NOFILE_HARD','65535')
+        np = gi.get('ULIMIT_NPROC','65535')
+        ul_line = f"    ulimits: {{memlock: {{soft: -1, hard: -1}}, nofile: {{soft: {ns}, hard: {nh}}}, nproc: {np}}}"
+        if force or 'ulimits:' not in block_text:
+            if force and 'ulimits:' in block_text:
+                new_lines = [ul_line if re.match(r'^    ulimits:', l) else l for l in new_lines]
+            else:
+                inserts.append(ul_line)
+            changes += 1
+
+    _rs = gi.get('INJECT_RESTART','0')
+    if _gi_enabled(_rs):
+        force = _gi_is_forced(gi, INJECT_RESTART)
+        policy = gi.get('RESTART_POLICY','unless-stopped')
+        if force or 'restart:' not in block_text:
+            if force and 'restart:' in block_text:
+                new_lines = [re.sub(r'^    restart:.*', f"    restart: {policy}", l) for l in new_lines]
+            else:
+                inserts.append(f"    restart: {policy}")
+            changes += 1
+
+    if inserts and not dry_run:
+        for ins in reversed(inserts):
+            new_lines.insert(insert_before, ins)
+
+    return new_lines, changes
+
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -1813,6 +2029,55 @@ def main():
         else:
             pr(f"  {G}✔ {_net_changes} network injection(s){X}")
         total += _net_changes
+
+    # ── Phase 7: Global key injection ───────────────────────────────────────
+    gi = load_global_inject_conf()
+    _anchor_keys = ['INJECT_STOP_GRACE','INJECT_LOGGING','INJECT_RESTART']
+    _svc_keys = ['INJECT_DEPLOY','INJECT_BLKIO','INJECT_ULIMITS']
+    _all_keys = _anchor_keys + _svc_keys
+    if any(_gi_enabled(gi.get(k,'0')) for k in _all_keys):
+        pr(f"\n{C}⚙️  Global key injection{X}")
+        _gi_changes = 0
+        for f in _files:
+            stack_name = os.path.basename(f).replace('.yml','').replace('.yaml','')
+            try:
+                file_lines = [l.rstrip('\n') for l in open(f).readlines()]
+                lines = list(file_lines)
+                changed = False
+
+                # Anchor-targeted keys: inject into x-common-caps block
+                if any(_gi_enabled(gi.get(k,'0')) for k in _anchor_keys):
+                    lines, anch_changes = inject_into_anchor(lines, gi, dry_run)
+                    if anch_changes > 0:
+                        _gi_changes += anch_changes
+                        changed = True
+                        if dry_run:
+                            pr(f"  {Y}[dry-run] {stack_name} anchor: {anch_changes} key(s) would be updated{X}")
+
+                # Service-targeted keys: inject into each real service
+                if any(_gi_enabled(gi.get(k,'0')) for k in _svc_keys):
+                    services, _raw = parse_services_with_positions(f)
+                    real_svcs = [s for s in services
+                                if not s['name'].startswith('provisioner')
+                                and s.get('image','')
+                                and not re.match(r'^alpine(:|$)', s.get('image',''))]
+                    for svc in real_svcs:
+                        lines, svc_changes = inject_global_keys(lines, svc, gi, dry_run)
+                        if svc_changes > 0:
+                            _gi_changes += svc_changes
+                            changed = True
+                            if dry_run:
+                                pr(f"  {Y}[dry-run] " + svc['name'] + f": {svc_changes} key(s) would be injected{X}")
+
+                if changed and not dry_run:
+                    _backup(f)
+                    open(f, 'w').write('\n'.join(lines))
+                    pr(f"  {G}✔ {stack_name}: keys injected{X}")
+            except Exception as e:
+                pr(f"  {R}✘ {stack_name}: {e}{X}")
+        if _gi_changes == 0:
+            pr(f"  {G}✔ All global keys already present{X}")
+        total += _gi_changes
 
 
     pr(f"\n{G}✨ Done — {total} change(s){'(dry-run, none written)' if dry_run else ''}{X}\n")
