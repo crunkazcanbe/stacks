@@ -1030,6 +1030,46 @@ def strip_profiles_from_file(filepath, dry_run=False):
     return False
 
 
+def collapse_blank_lines(filepath, dry_run=False):
+    """Fix all blank line issues: leading blanks, double-spacing, gaps in blocks."""
+    import re as _re
+    try:
+        content = open(filepath).read()
+    except:
+        return False
+    original = content
+    # Strip leading blank lines
+    content = content.lstrip('\n')
+    # Collapse 3+ blank lines to 1
+    content = _re.sub(r'\n{3,}', '\n\n', content)
+    # Smart removal if still heavily gapped
+    lines = content.split('\n')
+    blank_count = sum(1 for l in lines if l.strip() == '')
+    total = len(lines)
+    if total > 10 and blank_count / total > 0.05:
+        result = []
+        for i, line in enumerate(lines):
+            if line.strip() == '':
+                prev = next((lines[j] for j in range(i-1,-1,-1) if lines[j].strip()), '')
+                nxt = next((lines[j] for j in range(i+1,len(lines)) if lines[j].strip()), '')
+                prev_i = len(prev) - len(prev.lstrip())
+                nxt_i = len(nxt) - len(nxt.lstrip())
+                if (_re.match(r'^    (blkio_config|storage_opt|ulimits|deploy):', prev)
+                        and _re.match(r'^  [a-zA-Z#]', nxt)):
+                    result.append(line)
+                elif (prev_i == 0 and nxt_i == 0
+                      and not prev.startswith('#')
+                      and not nxt.startswith('#')):
+                    result.append(line)
+            else:
+                result.append(line)
+        content = '\n'.join(result)
+    if content != original:
+        if not dry_run:
+            open(filepath, 'w').write(content)
+        return True
+    return False
+
 def remove_gaps_from_file(filepath, dry_run=False):
     """
     Remove blank lines inside service blocks and after art banners.
@@ -1127,6 +1167,12 @@ def create_volume_dirs(paths, dry_run=False):
     """Create host directories for bind mounts if they don't exist."""
     created = []
     for path in paths:
+        # Never create dirs in /tmp, /proc, /sys, /dev
+        if any(path.startswith(p) for p in ['/tmp', '/proc', '/sys', '/dev', '/run']):
+            continue
+        # Must start with / and be a reasonable path
+        if not path.startswith('/'):
+            continue
         if not os.path.exists(path):
             if dry_run:
                 created.append(f"[dry-run] would create: {path}")
@@ -1134,6 +1180,18 @@ def create_volume_dirs(paths, dry_run=False):
                 try:
                     os.makedirs(path, mode=0o755, exist_ok=True)
                     created.append(f"created: {path}")
+                except PermissionError:
+                    # Try with sudo
+                    try:
+                        import subprocess as _sp
+                        r = _sp.run(['sudo', 'mkdir', '-p', path],
+                                   capture_output=True, timeout=5)
+                        if r.returncode == 0:
+                            created.append(f"created (sudo): {path}")
+                        else:
+                            created.append(f"failed (permission): {path}")
+                    except Exception as e2:
+                        created.append(f"failed: {path} ({e2})")
                 except Exception as e:
                     created.append(f"failed: {path} ({e})")
     return created
@@ -1208,6 +1266,185 @@ def convert_named_to_bind(lines, vol_base, dry_run=False):
         result.append(line)
 
     return result, changes
+
+
+# Dependency suffixes that identify non-master services
+# Dependency suffixes that identify non-master services
+_DEP_SUFFIXES = [
+    'db', 'database', 'postgres', 'postgresql', 'mysql', 'mariadb', 'mongo',
+    'mongodb', 'redis', 'cache', 'worker', 'backend', 'daemon', 'cron',
+    'celery', 'mq', 'queue', 'search', 'indexer', 'storage', 'realtime',
+    'hub', 'agent', 'fresh', 'data', 'exporter', 'api', 'proxy',
+    'registryctl', 'registry', 'jobservice', 'opensearch', 'rabbitmq',
+    'memcached', 'clickhouse', 'vault', 'broker',
+]
+
+def is_dep_service(name):
+    """Check if a service name looks like a dependency (db, redis, worker etc)."""
+    # Normalize: replace _ with - and split
+    parts = name.replace('_', '-').split('-')
+    # Check if any suffix part matches dep suffixes
+    for i in range(1, len(parts)):
+        suffix = '-'.join(parts[i:])
+        if suffix in _DEP_SUFFIXES:
+            return True
+        # Also check last part alone
+        if parts[-1] in _DEP_SUFFIXES:
+            return True
+    return False
+
+def get_all_groups_global(all_files):
+    """
+    Scan ALL compose files and build a global group map.
+    Returns {prefix: {net_name: str, members_by_file: {filename: [svc_names]}}}
+    """
+    import os as _os
+    all_services_by_file = {}
+    for f in all_files:
+        try:
+            svcs, _rlines = parse_services_with_positions(f)
+            _ = [l.rstrip('\n') for l in _rlines]
+            real = [s['name'] for s in svcs
+                   if not s['name'].startswith('provisioner')
+                   and s.get('image','')
+                   and not re.match(r'^alpine(:|$)', s.get('image',''))]
+            all_services_by_file[f] = real
+        except:
+            all_services_by_file[f] = []
+
+    # Build global prefix groups
+    prefix_to_files = {}  # prefix -> {file -> [svc_names]}
+    for f, svcs in all_services_by_file.items():
+        for svc in svcs:
+            prefix = svc.replace('_','-').split('-')[0]
+            if prefix not in prefix_to_files:
+                prefix_to_files[prefix] = {}
+            if f not in prefix_to_files[prefix]:
+                prefix_to_files[prefix][f] = []
+            prefix_to_files[prefix][f].append(svc)
+
+    # Build result - only groups with 2+ members globally
+    result = {}
+    for prefix, files_map in prefix_to_files.items():
+        all_members = [s for svcs in files_map.values() for s in svcs]
+        if len(all_members) < 2:
+            continue
+        net_name = f"{prefix}_net"
+        result[prefix] = {
+            'net_name': net_name,
+            'members_by_file': files_map,
+            'all_members': all_members,
+        }
+    return result
+
+def get_service_groups(services):
+    """
+    Group services by shared name prefix.
+    Returns dict: {prefix: {master: name, members: [names]}}
+    """
+    groups = {}
+    for svc in services:
+        # Normalize and get prefix (first word)
+        norm = svc.replace('_', '-')
+        prefix = norm.split('-')[0]
+        if prefix not in groups:
+            groups[prefix] = []
+        groups[prefix].append(svc)
+
+    result = {}
+    for prefix, members in groups.items():
+        if len(members) < 2:
+            continue
+        # Find master - shortest name that is NOT a dep service
+        non_deps = [s for s in members if not is_dep_service(s)]
+        deps = [s for s in members if is_dep_service(s)]
+
+        if non_deps:
+            # Master is the shortest non-dep (usually the main app)
+            master = sorted(non_deps, key=len)[0]
+            net_name = f"{master}_net".replace('-', '_')
+        else:
+            # All members are deps (master lives in another stack)
+            # Use just the prefix: coolify_net not coolify_db_net
+            master = prefix
+            net_name = f"{prefix}_net"
+
+        result[prefix] = {'master': master, 'net_name': net_name, 'members': members}
+
+    return result
+
+
+def inject_network_into_service(lines, svc, net_name, priority, dry_run=False):
+    """Add a network to a service block if not already present."""
+    # Check if network already in service
+    block = lines[svc['block_start']:svc['block_end']+1]
+    block_text = '\n'.join(block)
+    if net_name in block_text:
+        return lines, False
+    # Skip services using network_mode: service:* (they share another container's network)
+    if any('network_mode:' in l for l in block):
+        return lines, False
+
+    # Find networks: block in service
+    net_start = None
+    for i in range(svc['block_start'], min(svc['block_end']+1, len(lines))):
+        if re.match(r'^    networks:\s*$', lines[i]):
+            net_start = i
+            break
+
+    new_lines = list(lines)
+    net_entry = f"      {net_name}:\n        priority: {priority}"
+
+    if net_start is not None:
+        # Insert after networks: header, no blank lines
+        insert_at = net_start + 1
+        # Skip any existing entries to insert at end of networks block
+        while insert_at < len(new_lines) and re.match(r'^      ', new_lines[insert_at]):
+            insert_at += 1
+        new_lines.insert(insert_at, f"        priority: {priority}")
+        new_lines.insert(insert_at, f"      {net_name}:")
+    else:
+        # Add networks: block before labels or healthcheck or end of service
+        insert_at = svc['block_end']
+        for i in range(svc['block_start'], min(svc['block_end']+1, len(lines))):
+            if re.match(r'^    (labels|healthcheck|deploy|blkio):', lines[i]):
+                insert_at = i
+                break
+        new_lines.insert(insert_at, f"        priority: {priority}")
+        new_lines.insert(insert_at, f"      {net_name}:")
+        new_lines.insert(insert_at, "    networks:")
+
+    return new_lines, True
+
+
+def ensure_network_declared(lines, net_name, subnet=None):
+    """Ensure network is declared in the networks: section at bottom of file."""
+    # Check if already declared
+    for line in lines:
+        if re.match(rf'^  {re.escape(net_name)}:', line.rstrip()):
+            return lines, False
+
+    # Find top-level networks: block
+    net_section = None
+    for i, line in enumerate(lines):
+        if re.match(r'^networks:\s*$', line.rstrip()):
+            net_section = i
+            break
+
+    new_entry = f"  {net_name}: {{driver: bridge, external: false}}"
+    if subnet:
+        new_entry = (f"  {net_name}: {{name: {net_name}, driver: bridge, "
+                    f"external: false, ipam: {{driver: default, "
+                    f"config: [{{subnet: {subnet}}}]}}}}")
+
+    new_lines = list(lines)
+    if net_section is not None:
+        new_lines.insert(net_section + 1, new_entry)
+    else:
+        new_lines.append("networks:")
+        new_lines.append(new_entry)
+
+    return new_lines, True
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -1307,6 +1544,15 @@ def main():
 
 
     _files = files  # alias for phase 4/5
+    # ── Phase 4a: collapse double-spaced files ──────────────────────────────
+    for f in _files:
+        try:
+            if collapse_blank_lines(f, dry_run):
+                if not dry_run:
+                    pr(f"  {G}✔ {os.path.basename(f)}: double-spacing collapsed{X}")
+        except:
+            pass
+
     # ── Phase 4: remove blank lines inside service blocks ──
     if on(cfg.get("FIX_REMOVE_GAPS", "1")):
         pr(f"\n{C}🧹 Removing gaps in service blocks{X}")
@@ -1374,6 +1620,96 @@ def main():
         if _conv_total == 0:
             pr(f"  {G}✔ No named volumes found{X}")
         total += _conv_total
+
+
+
+    # ── Phase 6: Network auto-injection ─────────────────────────────────────
+    auto_nets = cfg.get("FIX_AUTO_NETWORKS", "").split()
+    auto_net_pri = int(cfg.get("FIX_AUTO_NETWORK_PRIORITY", "1000"))
+    do_link = on(cfg.get("FIX_AUTO_LINK_NETWORKS", "0"))
+    link_pri = int(cfg.get("FIX_AUTO_LINK_PRIORITY", "500"))
+    do_compose_net = on(cfg.get("FIX_AUTO_COMPOSE_NETWORK", "0"))
+    compose_net_pri = int(cfg.get("FIX_AUTO_COMPOSE_NETWORK_PRIORITY", "200"))
+
+    if auto_nets or do_link or do_compose_net:
+        pr(f"\n{C}🌐 Network auto-injection{X}")
+        _net_changes = 0
+
+        # Build global group map first (cross-file awareness)
+        global_groups = get_all_groups_global(_files) if do_link else {}
+
+        for f in _files:
+            stack_name = os.path.basename(f).replace('.yml','').replace('.yaml','')
+            try:
+                services, _raw = parse_services_with_positions(f)
+                file_lines = [l.rstrip('\n') for l in _raw]
+                real_svcs = [s for s in services
+                            if not s['name'].startswith('provisioner')
+                            and s.get('image','')
+                            and not re.match(r'^alpine(:|$)', s.get('image',''))]
+                if not real_svcs:
+                    continue
+
+                changed = False
+                lines = list(file_lines)
+
+                # 1. Add auto_nets to every service
+                for net in auto_nets:
+                    for svc in real_svcs:
+                        lines, did_change = inject_network_into_service(
+                            lines, svc, net, auto_net_pri, dry_run)
+                        if did_change:
+                            if dry_run:
+                                pr(f"  {Y}[dry-run] {svc['name']}: would add {net}{X}")
+                            _net_changes += 1
+                            changed = True
+                    lines, _ = ensure_network_declared(lines, net)
+
+                # 2. Auto-link networks using GLOBAL groups
+                if do_link:
+                    svc_names = {s['name'] for s in real_svcs}
+                    for prefix, grp in global_groups.items():
+                        # Check if any member of this group is in this file
+                        file_members = grp['members_by_file'].get(f, [])
+                        if not file_members:
+                            continue
+                        link_net = grp['net_name']
+                        for svc in real_svcs:
+                            if svc['name'] in file_members:
+                                lines, did_change = inject_network_into_service(
+                                    lines, svc, link_net, link_pri, dry_run)
+                                if did_change:
+                                    if dry_run:
+                                        pr(f"  {Y}[dry-run] {svc['name']}: would add {link_net}{X}")
+                                    _net_changes += 1
+                                    changed = True
+                        lines, _ = ensure_network_declared(lines, link_net)
+
+                # 3. Compose-wide network
+                if do_compose_net:
+                    compose_net = f"{stack_name}_net".replace('-', '_')
+                    for svc in real_svcs:
+                        lines, did_change = inject_network_into_service(
+                            lines, svc, compose_net, compose_net_pri, dry_run)
+                        if did_change:
+                            _net_changes += 1
+                            changed = True
+                    lines, _ = ensure_network_declared(lines, compose_net)
+
+                # Write file if changed
+                if changed and not dry_run:
+                    _backup(f)
+                    open(f, 'w').write('\n'.join(l.rstrip('\n') for l in lines))
+                    pr(f"  {G}✔ {stack_name}: networks injected{X}")
+
+            except Exception as e:
+                pr(f"  {R}✘ {stack_name}: {e}{X}")
+
+        if _net_changes == 0:
+            pr(f"  {G}✔ All networks already present{X}")
+        else:
+            pr(f"  {G}✔ {_net_changes} network injection(s){X}")
+        total += _net_changes
 
 
     pr(f"\n{G}✨ Done — {total} change(s){'(dry-run, none written)' if dry_run else ''}{X}\n")
