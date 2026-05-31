@@ -10,6 +10,8 @@ STACKS_CONF="~/.config/stacks/stacks.conf"
 
 # ── Built-in defaults ──────────────────────────────────────────────────────────
 STACKS_DIR="/srv/stacks/Stacks"
+[ -n "${STACKS_DIR_OVERRIDE:-}" ] && STACKS_DIR="$STACKS_DIR_OVERRIDE"
+[ -n "${DYNAMICS_DIR_OVERRIDE:-}" ] && DYNAMICS_DIR="$DYNAMICS_DIR_OVERRIDE"
 STACKS=(core_0 core_1 core_2 core_3 net_2 net_0 db_0 db_1 db_2 db_3 db_4 db_5 db_6 net_1 net_3 ai_0 ai_1 ai_2 ai_3 srvs_0 srvs_1 srvs_2 dev_0 dev_1 dev_2 dev_3 dev_4 data_0 data_1)
 DELAY=15
 DOMAINS=("auth.example.com" "opnsense.example.com" "traefik.example.com")
@@ -57,7 +59,10 @@ _register_config_options() {
   _stacks_config_option "INJECT_CPUSET"        "0"   "Inject CPU core pinning into services"
   _stacks_config_option "INJECT_BLKIO"         "0"   "Inject block IO limits into services"
   _stacks_config_option "INJECT_ULIMITS"       "0"   "Inject ulimits into services"
+  _stacks_config_option "STACKS_DIR_OVERRIDE"  ""    "Override stacks directory location"
+  _stacks_config_option "DYNAMICS_DIR_OVERRIDE" ""   "Override dynamics directory location"
 }
+
 
 if [ -f "$STACKS_CONF" ]; then
   source "$STACKS_CONF"
@@ -359,7 +364,7 @@ if [ "$DO_DETACH" -eq 1 ] && [ -z "$_IS_DETACHED" ]; then
   echo -e "\e[1;34m▶ Detaching sequence to run in background...\e[0m"
   echo -e "\e[1;32m✔ Use 'stacks $COMMAND attach' to view progress live.\e[0m"
   export _IS_DETACHED=1
-  nohup "$0" "$@" > "$LOG_FILE" 2>&1 &
+  nohup "$0" "$@" >> "$LOG_FILE" 2>&1 &
   exit 0
 fi
 
@@ -375,7 +380,7 @@ log_output() {
 # ==============================================================================
 show_header() {
   printf "\e[?25l"
-  echo "=== Sequence Started: $(date) [$COMMAND] ===" > "$LOG_FILE"
+  echo "=== Sequence Started: $(date) [$COMMAND] ===" >> "$LOG_FILE"
   > "$INFO_LOG"
   > "$FAILED_IMAGES_LOG"
 }
@@ -1571,7 +1576,13 @@ if [ "$COMMAND" == "up" ]; then
         # Restart Sablier so it registers new containers and puts them to sleep
         echo "  -> Restarting sablier to register and sleep new containers..." | log_output
         command docker restart sablier >/dev/null 2>&1 || true
-        sleep 5
+        # Wait max 2 min for sablier to become healthy
+        _sab_wait=0
+        while [ $_sab_wait -lt 24 ]; do
+          _sab_health=$(command docker inspect sablier --format="{{.State.Health.Status}}" 2>/dev/null || echo "none")
+          [ "$_sab_health" = "healthy" ] && break
+          sleep 5; _sab_wait=$((_sab_wait+1))
+        done
       fi
       smart_wait $DELAY
     done
