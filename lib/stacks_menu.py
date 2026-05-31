@@ -949,6 +949,8 @@ networks:
             lines.insert(insert, block+"\n")
             fcontent = "".join(lines)
         open(fpath,"w").write(fcontent)
+    except Exception as _inje:
+        pass
     # Write new service + description to descriptions file for future editing
     try:
         desc_file = ""
@@ -1467,7 +1469,7 @@ def draw_containers_tab(win, h, w, containers, sel, scroll):
 def draw_stacks_tab(win, h, w, stacks, sel, scroll):
     try:
         win.addstr(3, 2, "[ A ] All-Stacks Actions", curses.color_pair(C_ACCENT))
-        win.addstr(4, 2, f'{"STACK":<18} {"RUN/TOT":<8} {"FILE":>5}  {"IMG SIZE":>9}  {"RAM":>8}  {"STATUS"}',
+        win.addstr(4, 2, f'{"STACK":<18} {"RUN/TOT":<8} {"FILE":<6} {"IMG":<8} {"RAM":<7} {"STATUS"}',
                    curses.color_pair(C_YELLOW))
         win.addstr(5, 2, '─' * (w-4), curses.color_pair(C_DIM))
     except: pass
@@ -1524,16 +1526,16 @@ def draw_stacks_tab(win, h, w, stacks, sel, scroll):
         except: pass
         mem_str = f'{stack_mem:.0f}M' if running > 0 and stack_mem > 0 else ''
         if idx == sel:
-            line = f'{name:<18} {running:>3}/{total:<3} {size_str:>5}  {img_total_str:>9}  {mem_str:>10}  {status}'
+            line = f'{name:<18} {running:>3}/{total:<4} {size_str:<6} {img_total_str:<8} {mem_str:<7} {status}'
             try: win.addstr(y, 2, line[:w-4], curses.color_pair(C_SELECTED))
             except: pass
         else:
             try:
                 win.addstr(y, 2, f'{name:<18} {running:>3}/{total:<4}', curses.color_pair(C_NORMAL))
-                win.addstr(y, 27, f'{size_str:>5}', curses.color_pair(C_DIM))
-                win.addstr(y, 33, f'{img_total_str:>9}', curses.color_pair(C_CYAN if img_total > 0 else C_DIM))
-                win.addstr(y, 43, f'{mem_str:>10}', curses.color_pair(C_YELLOW if mem_str else C_DIM))
-                win.addstr(y, 54, f'  {status}', curses.color_pair(color))
+                win.addstr(y, 27, f'{size_str:<6}', curses.color_pair(C_DIM))
+                win.addstr(y, 33, f'{img_total_str:<8}', curses.color_pair(C_CYAN if img_total > 0 else C_DIM))
+                win.addstr(y, 41, f'{mem_str:<7}', curses.color_pair(C_YELLOW if mem_str else C_DIM))
+                win.addstr(y, 48, f'{status}', curses.color_pair(color))
             except: pass
 
 def draw_logs_tab(win, h, w, log_lines, sel, scroll):
