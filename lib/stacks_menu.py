@@ -246,6 +246,11 @@ def clean_log_line(raw):
     if _re.search(r'[░█]{2,}|Press Ctrl|===|____|\\___|/ ___', line): return ''
     if _re.match(r'^[\s_/\\|.=\[\](){}#*\-]+$', line): return ''
     if _re.match(r'^[\[\]#>\-\s\d%]+$', line): return ''
+    # Filter countdown/timer lines like "... 30 seconds remaining ..."
+    if _re.search(r'\d+\s+seconds? remaining', line): return ''
+    if _re.match(r'^\[\d{2}:\d{2}:\d{2}\]\s+\.\.\.\s+\d+', line): return ''
+    # Filter sablier restart lines
+    if 'Restarting sablier' in line.lower(): return ''
     return line
 
 def run_sequence_popup(stdscr, title, steps):
@@ -477,7 +482,7 @@ def do_container_action(stdscr, container_name, stack_file, action):
     run_log_popup(stdscr, f'{action} → {container_name}', cmd)
 
 # ── Tab views ────────────────────────────────────────────────────────────────
-TABS = ['Containers', 'Stacks', 'Backup', 'Build', 'Configs']
+TABS = ['Containers', 'Stacks', 'Logs', 'Backup', 'Build', 'Configs']
 
 def draw_containers_tab(win, h, w, containers, sel, scroll):
     win.addstr(3, 2, f'{"NAME":<35} {"STATUS":<12} {"IMAGE":<30}',
@@ -545,7 +550,33 @@ def draw_stacks_tab(win, h, w, stacks, sel, scroll):
             win.addstr(y, 2+len(f'{name:<25} {running:>4} {stopped:>5} {total:>6}  '),
                       status[:w-4], curses.color_pair(color))
 
+def draw_logs_tab(win, h, w, log_lines, sel, scroll):
+    try:
+        win.addstr(3, 2, "DOCKER LOGS", curses.color_pair(C_ACCENT))
+        win.addstr(4, 2, "─" * (w-4), curses.color_pair(C_DIM))
+        sources = [
+            ("docker-stacks", "sudo journalctl -u docker-stacks -n 50 --no-pager"),
+            ("docker-watchdog", "sudo journalctl -u docker-watchdog -n 50 --no-pager"),
+            ("traefik", "docker logs --tail=50 traefik 2>&1"),
+            ("sablier", "docker logs --tail=50 sablier 2>&1"),
+            ("crowdsec", "docker logs --tail=30 crowdsec 2>&1"),
+            ("authelia", "docker logs --tail=30 authelia 2>&1"),
+        ]
+        visible = h - 7
+        for i, (label, _) in enumerate(sources):
+            y = 5 + i
+            if y >= h - 2: break
+            if i == sel:
+                try: win.addstr(y, 2, f"  ▶  {label:<30}", curses.color_pair(C_SELECTED))
+                except: pass
+            else:
+                try: win.addstr(y, 2, f"     {label:<30}", curses.color_pair(C_NORMAL))
+                except: pass
+    except: pass
+    return sources
+
 def draw_backup_tab(win, h, w):
+
     win.addstr(3, 2, 'BACKUP', curses.color_pair(C_ACCENT))
     win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
     actions = [
@@ -609,6 +640,7 @@ def main(stdscr):
     FOOTER_HINTS = {
         0: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Action', 'Q Quit'],
         1: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Action', 'A All-Stacks', 'Q Quit'],
+        2: ['↑↓ Select Source', '↔ Switch Tab', 'ENTER View Logs', 'Q Quit'],
         2: ['↔ Switch Tab', 'Q Quit'],
         3: ['↔ Switch Tab', 'Q Quit'],
         4: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Edit', 'Q Quit'],
@@ -641,10 +673,12 @@ def main(stdscr):
             if sel >= len(stacks): sel = max(0, len(stacks)-1)
             draw_stacks_tab(stdscr, h, w, stacks, sel, scroll)
         elif tab == 2:
-            draw_backup_tab(stdscr, h, w)
+            log_sources = draw_logs_tab(stdscr, h, w, [], sel, scroll)
         elif tab == 3:
-            draw_build_tab(stdscr, h, w)
+            draw_backup_tab(stdscr, h, w)
         elif tab == 4:
+            draw_build_tab(stdscr, h, w)
+        elif tab == 5:
             draw_configs_tab(stdscr, h, w, cfg_sel)
 
         draw_footer(stdscr, h, w, FOOTER_HINTS.get(tab, []))
@@ -714,7 +748,21 @@ def main(stdscr):
                 if result and result[1]:
                     do_global_action(stdscr, result[1])
 
-        elif tab == 2:  # Backup
+        elif tab == 2:  # Logs
+            log_sources = [
+                ("docker-stacks",   "sudo journalctl -u docker-stacks -n 100 --no-pager"),
+                ("docker-watchdog", "sudo journalctl -u docker-watchdog -n 100 --no-pager"),
+                ("traefik",         "docker logs --tail=100 traefik 2>&1"),
+                ("sablier",         "docker logs --tail=100 sablier 2>&1"),
+                ("crowdsec",        "docker logs --tail=100 crowdsec 2>&1"),
+                ("authelia",        "docker logs --tail=100 authelia 2>&1"),
+            ]
+            if k == curses.KEY_UP: sel = max(0, sel-1)
+            elif k == curses.KEY_DOWN: sel = min(len(log_sources)-1, sel+1)
+            elif k in (10, 13) and 0 <= sel < len(log_sources):
+                label, cmd = log_sources[sel]
+                run_log_popup(stdscr, f'Logs: {label}', cmd)
+        elif tab == 3:  # Backup
             if k == ord('b') or k == ord('B'):
                 run_log_popup(stdscr, 'Backup', f'{STACKS_BIN} backup')
             elif k == ord('p') or k == ord('P'):
@@ -722,13 +770,13 @@ def main(stdscr):
             elif k == ord('l') or k == ord('L'):
                 run_log_popup(stdscr, 'Backup Log', 'cat /tmp/stacks_backup.log 2>/dev/null || echo "No log found"')
 
-        elif tab == 3:  # Build
+        elif tab == 4:  # Build
             if k == ord('g') or k == ord('G'):
                 run_log_popup(stdscr, 'Gen Dynamics', f'{STACKS_BIN} gen dynamics')
             elif k == ord('i') or k == ord('I'):
                 run_log_popup(stdscr, 'Gen Inject', f'python3 /usr/local/lib/stacks_gen_gi.py {CONF_DIR}/global_inject.conf {STACKS_DIR}')
 
-        elif tab == 4:  # Configs
+        elif tab == 5:  # Configs
             if k == curses.KEY_UP:
                 cfg_sel = max(0, cfg_sel - 1)
             elif k == curses.KEY_DOWN:
