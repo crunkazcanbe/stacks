@@ -55,29 +55,25 @@ app_data = {
 def get_stacks():
     stacks = []
     try:
+        # Get all running container names once
+        r = subprocess.run(
+            ['docker','ps','--format','{{.Names}}'],
+            capture_output=True, text=True, timeout=5)
+        running_names = set(r.stdout.strip().split('\n')) if r.returncode==0 else set()
+
         yml_files = sorted(f for f in os.listdir(STACKS_DIR) if f.endswith('.yml'))
         for fname in yml_files:
             name = fname.replace('.yml','')
             path = os.path.join(STACKS_DIR, fname)
-            # Get containers defined in this file
-            r = subprocess.run(['docker','compose','-f',path,'ps','--format','json'],
-                             capture_output=True, text=True, timeout=5)
-            running = stopped = 0
-            if r.returncode == 0:
-                for line in r.stdout.strip().split('\n'):
-                    if not line.strip(): continue
-                    try:
-                        c = json.loads(line)
-                        if c.get('State','').lower() in ('running','healthy','starting'):
-                            running += 1
-                        else:
-                            stopped += 1
-                    except: pass
-            # Count defined services
             try:
-                content = open(path).read()
-                total = len(re.findall(r'^\s{2}[a-zA-Z0-9_-]+:\s*$', content, re.MULTILINE))
-            except: total = 0
+                txt = open(path).read()
+                # Get all container_name values
+                names = re.findall(r'container_name:\s*(\S+)', txt)
+                total = len(re.findall(r'^  [a-zA-Z0-9_-]+:\s*$', txt, re.MULTILINE))
+                running = sum(1 for n in names if n in running_names)
+                stopped = len(names) - running
+            except:
+                names=[]; total=0; running=0; stopped=0
             stacks.append({
                 'name': name, 'running': running,
                 'stopped': stopped, 'total': total,
