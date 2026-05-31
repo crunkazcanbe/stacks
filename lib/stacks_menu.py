@@ -234,6 +234,7 @@ def run_log_popup(stdscr, title, cmd):
         while proc.poll() is None:
             pct=min(95,pct+2); frame+=1; draw(); _t.sleep(0.1)
             k=popup.getch()
+            if k == curses.KEY_MOUSE: continue
             if k in (27,ord("q"),ord("Q")): proc.terminate(); break
     except KeyboardInterrupt: proc.terminate()
     proc.wait(); popup.nodelay(False)
@@ -332,6 +333,8 @@ def run_sequence_popup(stdscr, title, steps):
                 _t.sleep(0.1)
                 k = popup.getch()
                 if k == 27:  # ESC only - ignore touch/mouse
+                if k == curses.KEY_MOUSE: continue
+                if k in (27, ord("q"), ord("Q")):
                     proc.terminate(); cancelled=True; break
         except KeyboardInterrupt: proc.terminate(); cancelled=True
         proc.wait()
