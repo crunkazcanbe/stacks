@@ -477,7 +477,7 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
     inline_mode = [False]   # True when typing inline filter
 
     h, w = stdscr.getmaxyx()
-    pw = min(w-2, 90); ph = min(h-2, 28)
+    pw = min(w-2, w-2); ph = min(h-2, h-2)
     py = (h-ph)//2; px = (w-pw)//2
     popup = curses.newwin(ph, pw, py, px)
     popup.keypad(True)
@@ -520,45 +520,49 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
             popup.clear()
             draw_border_box(popup, 0, 0, ph, pw, f" Search: {term[:pw-12]} ")
 
-            # Registry tabs row
+            # Registry tabs - 2 rows
             tab_x = 2
+            tab_y = 2
             for i, rname in enumerate(reg_names):
                 short = rname.split()[0][:8]
                 cnt = len([r for r in results.get(rname,[]) if "_error" not in r]) if rname != "ALL" else sum(len([r for r in v if "_error" not in r]) for v in results.values())
                 label = f"{short}({cnt})"
+                if tab_x + len(label) + 1 > pw - 2:
+                    tab_y += 1
+                    tab_x = 2
+                if tab_y > 3: break  # max 2 rows
                 if i == reg_idx[0]:
-                    try: popup.addstr(2, tab_x, label, curses.color_pair(C_SELECTED))
+                    try: popup.addstr(tab_y, tab_x, label, curses.color_pair(C_SELECTED))
                     except: pass
                 else:
-                    try: popup.addstr(2, tab_x, label, curses.color_pair(C_DIM))
+                    try: popup.addstr(tab_y, tab_x, label, curses.color_pair(C_DIM))
                     except: pass
                 tab_x += len(label) + 1
-                if tab_x > pw-10: break
 
-            # Alphabet filter row
+            # Alphabet filter row (row 4 after 2 tab rows)
             ax = 2
-            try: popup.addstr(3, ax, "Filter: ", curses.color_pair(C_DIM))
+            try: popup.addstr(4, ax, "Filter: ", curses.color_pair(C_DIM))
             except: pass
             ax = 10
             for ch in ALPHA:
                 attr = curses.color_pair(C_SELECTED) if letter_filter[0]==ch else curses.color_pair(C_ACCENT)
-                try: popup.addstr(3, ax, ch, attr)
+                try: popup.addstr(4, ax, ch, attr)
                 except: pass
                 ax += 2
                 if ax > pw-4: break
 
             # Inline search box
             if inline_mode[0]:
-                try: popup.addstr(4, 2, f"Search: {inline_filter[0]}_"[:pw-4], curses.color_pair(C_YELLOW))
+                try: popup.addstr(5, 2, f"/ {inline_filter[0]}_"[:pw-4], curses.color_pair(C_YELLOW))
                 except: pass
             else:
-                try: popup.addstr(4, 2, "/ to filter  ↔ registry  ↑↓ scroll  ENTER select"[:pw-4], curses.color_pair(C_DIM))
+                try: popup.addstr(5, 2, "/ search  ↔ reg  ↑↓ scroll  ENTER select  ESC cancel"[:pw-4], curses.color_pair(C_DIM))
                 except: pass
-            try: popup.addstr(5, 2, "─"*(pw-4), curses.color_pair(C_DIM))
+            try: popup.addstr(6, 2, "─"*(pw-4), curses.color_pair(C_DIM))
             except: pass
 
             visible_items = get_visible()
-            list_h = ph - 9
+            list_h = ph - 11
             items_to_show = visible_items[scroll[0]:scroll[0]+list_h]
 
             if loading and not visible_items:
@@ -567,7 +571,7 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
                 except: pass
             else:
                 for i, item in enumerate(items_to_show):
-                    y = 6 + i
+                    y = 7 + i
                     if y >= ph-3: break
                     idx = scroll[0] + i
                     pull = item.get("pull","")
