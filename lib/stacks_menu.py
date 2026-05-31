@@ -295,33 +295,37 @@ def run_sequence_popup(stdscr, title, steps):
     stdscr.clear(); stdscr.refresh()
     cancelled=False
     LOG_DIR = "/srv/stacks"
+    import glob as _g
+    # Get all stacks log files and their sizes before starting
+    def get_log_positions():
+        files = sorted(_g.glob(f"{LOG_DIR}/stacks_*.log"))
+        pos = {}
+        for f in files:
+            try: pos[f] = os.path.getsize(f)
+            except: pos[f] = 0
+        return pos
+    def read_new_log_lines(positions):
+        lines = []
+        for f, p in list(positions.items()):
+            try:
+                with open(f, "rb") as lf:
+                    lf.seek(p)
+                    for raw in lf:
+                        positions[f] += len(raw)
+                        cleaned = clean_log_line(raw.decode("utf-8","ignore"))
+                        if cleaned: lines.append(cleaned)
+            except: pass
+        return lines
     for i,(slabel,cmd) in enumerate(steps):
         draw(i,slabel)
-        # Detect which log file this command writes to
-        log_file = None
-        for word in ["up","down","fix","repair","restart","scale","proxy"]:
-            if f"stacks {word}" in cmd or f"stacks_repair" in cmd:
-                log_file = f"{LOG_DIR}/stacks_{word}.log"
-                break
+        log_positions = get_log_positions()
         proc=subprocess.Popen(cmd,shell=True,
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        # Tail the log file while command runs
-        log_pos = 0
-        if log_file and os.path.exists(log_file):
-            try: log_pos = os.path.getsize(log_file)
-            except: log_pos = 0
         try:
             while proc.poll() is None:
-                # Read new log lines
-                if log_file and os.path.exists(log_file):
-                    try:
-                        with open(log_file) as lf:
-                            lf.seek(log_pos)
-                            for raw in lf:
-                                log_pos += len(raw.encode())
-                                cleaned = clean_log_line(raw)
-                                if cleaned:
-                                    last_log[0] = cleaned
+                new_lines = read_new_log_lines(log_positions)
+                if new_lines:
+                    last_log[0] = new_lines[-1]
                     except: pass
                 frame += 1
                 draw(i, slabel)
