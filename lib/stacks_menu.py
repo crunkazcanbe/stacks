@@ -710,14 +710,17 @@ def run_build_wizard(stdscr, new_stack=False):
 
     def inp(prompt, default=""):
         frame[0]+=1
+        curses.flushinp()
         return _bw_input(popup, pw, ph, prompt, default, bar_w, pct[0], title, spinner, frame[0])
 
     def sel(prompt, items):
         frame[0]+=1
+        curses.flushinp()
         return _bw_select(popup, pw, ph, prompt, items, bar_w, pct[0], title, spinner, frame[0])
 
     def yn(prompt, default="n"):
         frame[0]+=1
+        curses.flushinp()
         return _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct[0], title, spinner, frame[0])
 
     # State for all steps
@@ -747,8 +750,12 @@ def run_build_wizard(stdscr, new_stack=False):
     while True:
         current = STEPS[step] if step < len(STEPS) else "done"
         update_title()
+        # Debug log
+        try:
+            with open("/tmp/wizard_debug.log", "a") as _dbg:
+                _dbg.write(f"step={step} current={current}\n")
+        except: pass
 
-        curses.flushinp()  # flush buffered keys between steps
         if current == "stack":
             pct[0] = 5
             if new_stack:
