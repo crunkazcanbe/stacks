@@ -689,7 +689,12 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
 
 def run_build_wizard(stdscr, new_stack=False):
     """Full curses build wizard with back navigation."""
-    import subprocess as _sp, glob as _gl, time as _t
+    import subprocess as _sp, glob as _gl, time as _t, signal as _sig
+    # Trap Ctrl+C so it goes back instead of killing everything
+    _back_flag = [False]
+    def _handle_ctrlc(sig, frame):
+        _back_flag[0] = True
+    _old_handler = _sig.signal(_sig.SIGINT, _handle_ctrlc)
     h, w = stdscr.getmaxyx()
     pw = min(w-4, 74); ph = 14
     py = (h-ph)//2; px = (w-pw)//2
@@ -1139,6 +1144,7 @@ def run_build_wizard(stdscr, new_stack=False):
     except: pass
     popup.refresh()
     popup.getch()
+    _sig.signal(_sig.SIGINT, _old_handler)  # restore
 
 def _bw_input(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame):
     """Single line text input inside popup."""
