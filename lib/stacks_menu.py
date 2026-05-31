@@ -1984,6 +1984,7 @@ def main(stdscr):
                     run_log_popup(stdscr, 'Force regen ALL', f'python3 /usr/local/lib/stacks_gen_dynamic.py all --force')
                 elif action == 'repair_dyn':
                     run_log_popup(stdscr, 'Repair ALL dynamics', f'python3 /usr/local/lib/stacks_repair_dynamic.py {DYNAMICS_DIR}')
+        elif tab == 5:  # Backup
             if k == curses.KEY_UP: sel = max(0, sel-1)
             elif k == curses.KEY_DOWN: sel = min(len(BACKUP_ITEMS)-1, sel+1)
             elif k in (10, 13):
@@ -1994,7 +1995,7 @@ def main(stdscr):
                     run_log_popup(stdscr, 'Pre-backup', f'{STACKS_BIN} backup pre')
                 elif action == 'backup_log':
                     curses.endwin()
-                    os.system(f'{os.environ.get("EDITOR","nano")} /tmp/stacks_backup.log 2>/dev/null || echo No log')
+                    os.system(f'{os.environ.get("EDITOR","nano")} /tmp/stacks_backup.log')
                     stdscr=curses.initscr(); init_colors(); curses.curs_set(0); stdscr.clear()
                 elif action == 'view_up_log':
                     curses.endwin()
@@ -2010,7 +2011,6 @@ def main(stdscr):
                     stdscr=curses.initscr(); init_colors(); curses.curs_set(0); stdscr.clear()
                 elif action == 'backup_restore':
                     run_log_popup(stdscr, 'Restore', f'{STACKS_BIN} backup restore')
-
         elif tab == 6:  # Build
             if k == curses.KEY_UP: sel = max(0, sel-1)
             elif k == curses.KEY_DOWN: sel = min(len(BUILD_ITEMS)-1, sel+1)
