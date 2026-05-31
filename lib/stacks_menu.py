@@ -1745,23 +1745,45 @@ CONFIG_FILES = [
 ]
 DESCRIPTIONS_DIR = os.path.expanduser("~/.config/stacks/descriptions")
 
+def get_config_items():
+    """Build flat list of (label, fpath, is_dir) for configs tab."""
+    items = []
+    for label, fname in CONFIG_FILES:
+        fpath = os.path.join(CONF_DIR, fname)
+        items.append((label, fpath, False))
+    # Descriptions folder
+    desc_dir = os.path.expanduser("~/.config/stacks/descriptions")
+    try:
+        desc_files = sorted(f for f in os.listdir(desc_dir) if f.endswith(".conf"))
+        total_sz = sum(os.path.getsize(os.path.join(desc_dir,f)) for f in desc_files)
+        items.append((f"📁 descriptions/  ({len(desc_files)} files, {max(1,total_sz//1024)}K)", desc_dir, True))
+        for f in desc_files:
+            items.append((f"   {f}", os.path.join(desc_dir,f), False))
+    except: pass
+    return items
+
 def draw_configs_tab(win, h, w, sel):
     try:
-        win.addstr(3, 2, 'CONFIGS', curses.color_pair(C_ACCENT))
-        win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
+        win.addstr(3, 2, "CONFIGS", curses.color_pair(C_ACCENT))
+        win.addstr(4, 2, "─" * (w-4), curses.color_pair(C_DIM))
     except: pass
-    for i, (label, fname) in enumerate(CONFIG_FILES):
+    items = get_config_items()
+    for i, (label, fpath, is_dir) in enumerate(items):
         y = 6 + i
         if y >= win.getmaxyx()[0]-2: break
-        fpath = os.path.join(CONF_DIR, fname)
-        try: fsize = f"{os.path.getsize(fpath)//1024}K"
+        try:
+            sz = os.path.getsize(fpath) if not is_dir else sum(
+                os.path.getsize(os.path.join(fpath,f)) for f in os.listdir(fpath)
+                if f.endswith(".conf"))
+            fsize = f"{max(1,sz//1024)}K"
         except: fsize = ""
-        line = f"{label:<30} {fsize:>6}"
+        line = f"{label:<40} {fsize:>5}"
         if i == sel:
             try: win.addstr(y, 2, f"  ▶  {line}", curses.color_pair(C_SELECTED))
             except: pass
         else:
-            try: win.addstr(y, 2, f"     {line}", curses.color_pair(C_NORMAL))
+            attr = curses.color_pair(C_ACCENT) if is_dir else curses.color_pair(C_NORMAL)
+            try: win.addstr(y, 2, f"     {line}", attr)
             except: pass
 
 # ── Main TUI ─────────────────────────────────────────────────────────────────
