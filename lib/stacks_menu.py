@@ -377,7 +377,7 @@ def _bw_status(popup, pw, ph, msg, bar_w, pct, title, spinner, frame):
     popup.refresh()
 
 
-def run_build_wizard(stdscr):
+def run_build_wizard(stdscr, new_stack=False):
     """Full curses build wizard - same questions as stacks build."""
     import subprocess as _sp, glob as _gl, time as _t
     h, w = stdscr.getmaxyx()
@@ -413,8 +413,39 @@ def run_build_wizard(stdscr):
     status("Loading stacks...", 5)
     stacks = sorted([f.replace(".yml","") for f in os.listdir(STACKS_DIR)
                      if f.endswith(".yml") and not f.startswith("db_")])
-    target_stack = sel("Select target stack:", stacks)
-    if not target_stack: return
+    if new_stack:
+        # Create new stack
+        stack_name = inp("New stack name (e.g. srvs_3):", "srvs_3")
+        if not stack_name: return
+        fpath = os.path.join(STACKS_DIR, stack_name + ".yml")
+        if os.path.exists(fpath):
+            status(f"{stack_name}.yml already exists - adding to it", 5)
+        else:
+            # Create new stack from template
+            template = f"""name: {stack_name}
+# ══════════════════════════════════════════════════
+# {stack_name} stack
+# ══════════════════════════════════════════════════
+
+x-common: &common-caps
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {{max-size: 10m, max-file: '3'}}
+
+services:
+
+networks:
+  traefik_net:
+    external: true
+"""
+            open(fpath, "w").write(template)
+            status(f"Created {stack_name}.yml", 8)
+        target_stack = stack_name
+        stacks.append(stack_name)
+    else:
+        target_stack = sel("Select target stack:", stacks)
+        if not target_stack: return
 
     # Step 2: Service name
     svc_name = inp("Service name:", "my-service")
@@ -699,7 +730,7 @@ def _bw_status(popup, pw, ph, msg, bar_w, pct, title, spinner, frame):
     popup.refresh()
 
 
-def run_build_wizard(stdscr):
+def run_build_wizard(stdscr, new_stack=False):
     """Full curses build wizard - same questions as stacks build."""
     import subprocess as _sp, glob as _gl, time as _t
     h, w = stdscr.getmaxyx()
@@ -735,8 +766,39 @@ def run_build_wizard(stdscr):
     status("Loading stacks...", 5)
     stacks = sorted([f.replace(".yml","") for f in os.listdir(STACKS_DIR)
                      if f.endswith(".yml") and not f.startswith("db_")])
-    target_stack = sel("Select target stack:", stacks)
-    if not target_stack: return
+    if new_stack:
+        # Create new stack
+        stack_name = inp("New stack name (e.g. srvs_3):", "srvs_3")
+        if not stack_name: return
+        fpath = os.path.join(STACKS_DIR, stack_name + ".yml")
+        if os.path.exists(fpath):
+            status(f"{stack_name}.yml already exists - adding to it", 5)
+        else:
+            # Create new stack from template
+            template = f"""name: {stack_name}
+# ══════════════════════════════════════════════════
+# {stack_name} stack
+# ══════════════════════════════════════════════════
+
+x-common: &common-caps
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {{max-size: 10m, max-file: '3'}}
+
+services:
+
+networks:
+  traefik_net:
+    external: true
+"""
+            open(fpath, "w").write(template)
+            status(f"Created {stack_name}.yml", 8)
+        target_stack = stack_name
+        stacks.append(stack_name)
+    else:
+        target_stack = sel("Select target stack:", stacks)
+        if not target_stack: return
 
     # Step 2: Service name
     svc_name = inp("Service name:", "my-service")
@@ -1313,18 +1375,32 @@ def draw_backup_tab(win, h, w):
         win.addstr(6+i, 4, f'[{key}]', curses.color_pair(C_ACCENT))
         win.addstr(6+i, 9, desc, curses.color_pair(C_NORMAL))
 
-def draw_build_tab(win, h, w):
-    win.addstr(3, 2, 'BUILD', curses.color_pair(C_ACCENT))
-    win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
-    actions = [
-        ('N', 'New stack from template'),
-        ('A', 'Add service to stack'),
-        ('G', 'Generate dynamic config'),
-        ('I', 'Generate global inject'),
-    ]
-    for i, (key, desc) in enumerate(actions):
-        win.addstr(6+i, 4, f'[{key}]', curses.color_pair(C_ACCENT))
-        win.addstr(6+i, 9, desc, curses.color_pair(C_NORMAL))
+BUILD_ITEMS = [
+    ('Build new service (wizard)',           'build_new'),
+    ('Create new stack + add service',       'build_new_stack'),
+    ('Generate dynamics from ALL stacks',    'gen_dyn_all'),
+    ('Generate dynamics from one stack',     'gen_dyn_one'),
+    ('Force regen ALL dynamics',             'gen_dyn_force'),
+    ('Generate global inject config',        'gen_inject'),
+    ('Generate sablier groups config',       'gen_groups'),
+    ('Run stacks fix on ALL',                'fix_all'),
+    ('Run stacks repair on ALL',             'repair_all'),
+]
+
+def draw_build_tab(win, h, w, sel=0):
+    try:
+        win.addstr(3, 2, 'BUILD', curses.color_pair(C_ACCENT))
+        win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
+    except: pass
+    for i, (label, _) in enumerate(BUILD_ITEMS):
+        y = 5 + i
+        if y >= h-2: break
+        if i == sel:
+            try: win.addstr(y, 2, f'  ▶  {label:<50}', curses.color_pair(C_SELECTED))
+            except: pass
+        else:
+            try: win.addstr(y, 2, f'     {label:<50}', curses.color_pair(C_NORMAL))
+            except: pass
 
 CONFIG_FILES = [
     ("stacks.conf",        "stacks.conf"),
@@ -1591,6 +1667,9 @@ def main(stdscr):
                 action = BUILD_ITEMS[sel][1]
                 if action == 'build_new':
                     run_build_wizard(stdscr)
+                    stdscr.clear()
+                elif action == 'build_new_stack':
+                    run_build_wizard(stdscr, new_stack=True)
                     stdscr.clear()
                 elif action == 'gen_dyn_all':
                     run_log_popup(stdscr, 'Gen ALL dynamics', f'python3 /usr/local/lib/stacks_gen_dynamic.py all')
