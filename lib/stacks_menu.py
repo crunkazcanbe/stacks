@@ -776,7 +776,7 @@ def main(stdscr):
         elif tab == 5:
             draw_backup_tab(stdscr, h, w)
         elif tab == 6:
-            draw_build_tab(stdscr, h, w)
+            draw_build_tab(stdscr, h, w, sel)
         elif tab == 7:
             draw_configs_tab(stdscr, h, w, cfg_sel)
 
@@ -941,17 +941,29 @@ def main(stdscr):
                 run_log_popup(stdscr, 'Backup Log', 'cat /tmp/stacks_backup.log 2>/dev/null || echo "No log found"')
 
         elif tab == 6:  # Build
-            if k in (ord('n'), ord('N'), 10, 13):
-                curses.endwin()
-                os.system(f'{STACKS_BIN} build')
-                input('\nPress Enter to return to menu...')
-                stdscr = curses.initscr(); init_colors(); curses.curs_set(0); stdscr.clear()
-            elif k == ord('g') or k == ord('G'):
-                run_log_popup(stdscr, 'Gen Dynamics', f'{STACKS_BIN} gen dynamics')
-            elif k == ord('i') or k == ord('I'):
-                run_log_popup(stdscr, 'Gen Inject', f'python3 /usr/local/lib/stacks_gen_gi.py {CONF_DIR}/global_inject.conf {STACKS_DIR}')
-            elif k == ord('d') or k == ord('D'):
-                run_log_popup(stdscr, 'Gen ALL dynamics', f'python3 /usr/local/lib/stacks_gen_dynamic.py all')
+            if k == curses.KEY_UP: sel = max(0, sel-1)
+            elif k == curses.KEY_DOWN: sel = min(len(BUILD_ITEMS)-1, sel+1)
+            elif k in (10, 13):
+                action = BUILD_ITEMS[sel][1]
+                if action == 'build_new':
+                    curses.endwin()
+                    os.system(f'{STACKS_BIN} build')
+                    input('\nPress Enter to return to menu...')
+                    stdscr = curses.initscr(); init_colors(); curses.curs_set(0); stdscr.clear()
+                elif action == 'gen_dyn_all':
+                    run_log_popup(stdscr, 'Gen ALL dynamics', f'python3 /usr/local/lib/stacks_gen_dynamic.py all')
+                elif action == 'gen_dyn_force':
+                    run_log_popup(stdscr, 'Force regen ALL', f'python3 /usr/local/lib/stacks_gen_dynamic.py all --force')
+                elif action == 'gen_dyn_one':
+                    run_log_popup(stdscr, 'Gen dynamics (stacks with traefik)', f'python3 /usr/local/lib/stacks_gen_dynamic.py all')
+                elif action == 'gen_inject':
+                    run_log_popup(stdscr, 'Gen global inject', f'python3 /usr/local/lib/stacks_gen_gi.py {CONF_DIR}/global_inject.conf {STACKS_DIR}')
+                elif action == 'gen_groups':
+                    run_log_popup(stdscr, 'Gen sablier groups', f'{STACKS_BIN} gen srvs')
+                elif action == 'fix_all':
+                    run_log_popup(stdscr, 'Fix ALL', f'{STACKS_BIN} fix all')
+                elif action == 'repair_all':
+                    run_log_popup(stdscr, 'Repair ALL', f'python3 /usr/local/lib/stacks_repair.py {STACKS_DIR}')
 
         elif tab == 7:  # Configs
             if k == curses.KEY_UP:
