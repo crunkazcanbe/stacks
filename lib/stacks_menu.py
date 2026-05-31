@@ -467,40 +467,65 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
         return None
 
     reg_names = ["ALL"] + list(REGISTRIES.keys())
-    reg_idx = [0]     # list so nested draw() can modify it
-    results = {}      # {reg_name: [result, ...]}
-    sel = 0
-    scroll = 0
-    searching = True
+    reg_idx = [0]
+    results = {}
+    sel = [0]
+    scroll = [0]
     search_done = False
+    letter_filter = [None]  # None=all, 'a'-'z'=filter
+    inline_filter = [""]    # typed filter
+    inline_mode = [False]   # True when typing inline filter
 
     h, w = stdscr.getmaxyx()
-    pw = min(w-2, 80); ph = min(h-2, 26)
+    pw = min(w-2, 90); ph = min(h-2, 28)
     py = (h-ph)//2; px = (w-pw)//2
     popup = curses.newwin(ph, pw, py, px)
     popup.keypad(True)
     popup.nodelay(True)
 
+    ALPHA = "abcdefghijklmnopqrstuvwxyz#"
+
     def get_visible():
-        """Get results for current registry tab."""
         if reg_names[reg_idx[0]] == "ALL":
             out = []
             for rlist in results.values():
                 out += [r for r in rlist if "_error" not in r]
-            return out
-        return [r for r in results.get(reg_names[reg_idx[0]], []) if "_error" not in r]
+        else:
+            out = [r for r in results.get(reg_names[reg_idx[0]], []) if "_error" not in r]
+        # Apply letter filter
+        if letter_filter[0]:
+            lf = letter_filter[0]
+            if lf == "#":
+                out = [r for r in out if r.get("pull","") and not r["pull"][0].isalpha()]
+            else:
+                out = [r for r in out if r.get("pull","").lower().startswith(lf) or
+                       r.get("pull","").lower().split("/")[-1].startswith(lf)]
+        # Apply inline filter
+        if inline_filter[0]:
+            f = inline_filter[0].lower()
+            out = [r for r in out if f in r.get("pull","").lower() or f in r.get("desc","").lower()]
+        return out
+
+    def human_num(n):
+        if not n: return ""
+        try: n = int(n)
+        except: return str(n)[:6]
+        if n >= 1_000_000_000: return f"{n//1_000_000_000}B"
+        if n >= 1_000_000: return f"{n//1_000_000}M"
+        if n >= 1_000: return f"{n//1_000}K"
+        return str(n)
 
     def draw(loading=False):
         try:
             popup.clear()
             draw_border_box(popup, 0, 0, ph, pw, f" Search: {term[:pw-12]} ")
 
-            # Registry tabs - left/right to switch
+            # Registry tabs row
             tab_x = 2
             for i, rname in enumerate(reg_names):
-                short = rname[:10]
+                short = rname.split()[0][:8]
                 cnt = len([r for r in results.get(rname,[]) if "_error" not in r]) if rname != "ALL" else sum(len([r for r in v if "_error" not in r]) for v in results.values())
-                label = f" {short}({cnt}) "
+                label = f"{short}({cnt})"
                 if i == reg_idx[0]:
                     try: popup.addstr(2, tab_x, label, curses.color_pair(C_SELECTED))
                     except: pass
@@ -510,11 +535,31 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
                 tab_x += len(label) + 1
                 if tab_x > pw-10: break
 
-            popup.addstr(3, 2, "─"*(pw-4), curses.color_pair(C_DIM))
+            # Alphabet filter row
+            ax = 2
+            try: popup.addstr(3, ax, "Filter: ", curses.color_pair(C_DIM))
+            except: pass
+            ax = 10
+            for ch in ALPHA:
+                attr = curses.color_pair(C_SELECTED) if letter_filter[0]==ch else curses.color_pair(C_ACCENT)
+                try: popup.addstr(3, ax, ch, attr)
+                except: pass
+                ax += 2
+                if ax > pw-4: break
+
+            # Inline search box
+            if inline_mode[0]:
+                try: popup.addstr(4, 2, f"Search: {inline_filter[0]}_"[:pw-4], curses.color_pair(C_YELLOW))
+                except: pass
+            else:
+                try: popup.addstr(4, 2, "/ to filter  ↔ registry  ↑↓ scroll  ENTER select"[:pw-4], curses.color_pair(C_DIM))
+                except: pass
+            try: popup.addstr(5, 2, "─"*(pw-4), curses.color_pair(C_DIM))
+            except: pass
 
             visible_items = get_visible()
-            list_h = ph - 8
-            items_to_show = visible_items[scroll:scroll+list_h]
+            list_h = ph - 9
+            items_to_show = visible_items[scroll[0]:scroll[0]+list_h]
 
             if loading and not visible_items:
                 sp = spinner[frame[0] % len(spinner)]
@@ -522,21 +567,34 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
                 except: pass
             else:
                 for i, item in enumerate(items_to_show):
-                    y = 4 + i
-                    if y >= ph-4: break
-                    idx = scroll + i
+                    y = 6 + i
+                    if y >= ph-3: break
+                    idx = scroll[0] + i
                     pull = item.get("pull","")
-                    stars = item.get("stars","")
-                    reg = item.get("registry","")
-                    desc = item.get("desc","")[:30]
-                    star_str = f"★{stars}" if stars else ""
-                    line = f"{pull:<40} {star_str:<8} {reg:<20}"[:pw-4]
-                    if idx == sel:
+                    pulls = human_num(item.get("pulls","") or item.get("pull_count",""))
+                    stars = human_num(item.get("stars","") or item.get("star_count",""))
+                    # Image size from local cache
+                    img_sz = app_data["img_sizes"].get(pull, app_data["img_sizes"].get(pull+":latest",""))[:6]
+                    pull_str = pull[:38]
+                    stat_str = f"↓{pulls:<5} ★{stars:<5} {img_sz:<7}"
+                    line = f"{pull_str:<38} {stat_str}"[:pw-4]
+                    if idx == sel[0]:
                         try: popup.addstr(y, 2, line, curses.color_pair(C_SELECTED))
                         except: pass
                     else:
-                        try: popup.addstr(y, 2, line, curses.color_pair(C_NORMAL))
+                        try:
+                            popup.addstr(y, 2, f"{pull_str:<38} ", curses.color_pair(C_NORMAL))
+                            popup.addstr(y, 41, f"↓{pulls:<5}", curses.color_pair(C_GREEN if pulls else C_DIM))
+                            popup.addstr(y, 48, f"★{stars:<5}", curses.color_pair(C_YELLOW if stars else C_DIM))
+                            popup.addstr(y, 54, f"{img_sz:<7}", curses.color_pair(C_CYAN if img_sz else C_DIM))
                         except: pass
+
+            # Footer
+            total = len(get_visible())
+            try: popup.addstr(ph-2, 2, f"[{total} results]  ◀▶=Registry  letters=filter  /=search  ESC=cancel"[:pw-4], curses.color_pair(C_DIM))
+            except: pass
+            popup.refresh()
+        except: pass
 
             # Footer
             total = len(get_visible())
@@ -565,30 +623,51 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
     while True:
         frame[0] += 1
         draw(loading=not search_done)
-        _t.sleep(0.1)
+        _t.sleep(0.08)
 
         k = popup.getch()
         if k == -1: continue
         if k == curses.KEY_MOUSE: continue
+        if k == curses.KEY_RESIZE: continue
 
         visible_items = get_visible()
-        list_h = ph - 8
+        list_h = ph - 9
+
+        if inline_mode[0]:
+            # Typing inline filter
+            if k in (10, 13): inline_mode[0] = False
+            elif k == 27: inline_mode[0] = False; inline_filter[0] = ""
+            elif k in (curses.KEY_BACKSPACE, 127, 8):
+                inline_filter[0] = inline_filter[0][:-1]
+            elif 32 <= k <= 126:
+                inline_filter[0] += chr(k)
+            sel[0] = 0; scroll[0] = 0
+            continue
 
         if k == curses.KEY_UP:
-            if sel > 0: sel -= 1
-            if sel < scroll: scroll = sel
+            if sel[0] > 0: sel[0] -= 1
+            if sel[0] < scroll[0]: scroll[0] = sel[0]
         elif k == curses.KEY_DOWN:
-            if sel < len(visible_items)-1: sel += 1
-            if sel >= scroll + list_h: scroll = sel - list_h + 1
+            if sel[0] < len(visible_items)-1: sel[0] += 1
+            if sel[0] >= scroll[0] + list_h: scroll[0] = sel[0] - list_h + 1
         elif k == curses.KEY_LEFT:
             reg_idx[0] = (reg_idx[0] - 1) % len(reg_names)
-            sel = 0; scroll = 0
+            sel[0] = 0; scroll[0] = 0
         elif k == curses.KEY_RIGHT:
             reg_idx[0] = (reg_idx[0] + 1) % len(reg_names)
-            sel = 0; scroll = 0
+            sel[0] = 0; scroll[0] = 0
+        elif k == ord("/"):
+            inline_mode[0] = True; inline_filter[0] = ""
+        elif k == ord("#"):
+            letter_filter[0] = None if letter_filter[0]=="#" else "#"
+            sel[0] = 0; scroll[0] = 0
+        elif 97 <= k <= 122:  # a-z
+            ch = chr(k)
+            letter_filter[0] = None if letter_filter[0]==ch else ch
+            sel[0] = 0; scroll[0] = 0
         elif k in (10, 13):
-            if visible_items and sel < len(visible_items):
-                return visible_items[sel].get("pull","")
+            if visible_items and sel[0] < len(visible_items):
+                return visible_items[sel[0]].get("pull","")
             return None
         elif k == 27:
             return None
