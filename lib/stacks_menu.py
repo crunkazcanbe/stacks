@@ -477,7 +477,7 @@ def registry_search_popup(stdscr, term, bar_w, pct, title, spinner, frame):
     inline_mode = [False]   # True when typing inline filter
 
     h, w = stdscr.getmaxyx()
-    pw = min(w-2, w-2); ph = min(h-2, h-2)
+    pw = min(w-4, 82); ph = min(h-4, 30)
     py = (h-ph)//2; px = (w-pw)//2
     popup = curses.newwin(ph, pw, py, px)
     popup.keypad(True)
