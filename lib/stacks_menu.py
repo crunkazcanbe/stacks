@@ -746,16 +746,23 @@ def main(stdscr):
 
         elif tab == 2:  # Logs
             import glob as _glob
-    _log_dir = '/srv/stacks'
-    _log_files = sorted(_glob.glob(f'{_log_dir}/stacks_*.log'))
-    log_sources = [(f.split('/')[-1], f'cat {f}') for f in _log_files]
-    if not log_sources:
-        log_sources = [('No logs found', 'echo No stacks logs found')]
+            _log_dir = '/srv/stacks'
+            _log_files = sorted(_glob.glob(f'{_log_dir}/stacks_*.log'))
+            log_sources = [(f.split('/')[-1], f'cat {f}') for f in _log_files]
+            if not log_sources:
+                log_sources = [('No logs found', 'echo No stacks logs found')]
             if k == curses.KEY_UP: sel = max(0, sel-1)
             elif k == curses.KEY_DOWN: sel = min(len(log_sources)-1, sel+1)
             elif k in (10, 13) and 0 <= sel < len(log_sources):
                 label, cmd = log_sources[sel]
-                run_log_popup(stdscr, f'Logs: {label}', cmd)
+                fpath = cmd.replace("cat ", "")
+                editor = os.environ.get("EDITOR", "nano")
+                curses.endwin()
+                os.system(f"{editor} {fpath}")
+                stdscr = curses.initscr()
+                init_colors()
+                curses.curs_set(0)
+                stdscr.clear()
         elif tab == 3:  # Backup
             if k == ord('b') or k == ord('B'):
                 run_log_popup(stdscr, 'Backup', f'{STACKS_BIN} backup')
@@ -784,6 +791,7 @@ def main(stdscr):
                 stdscr = curses.initscr()
                 init_colors()
                 curses.curs_set(0)
+                stdscr.clear()
 
 def run():
     curses.wrapper(main)
