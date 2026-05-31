@@ -707,31 +707,74 @@ networks:
             companion_info = {"name":comp_name,"image":comp_img,"stack":comp_stack}
     pct[0] = 75
 
-    # Step 8: Build scaffold
+    # Step 8: Build scaffold using build.conf
     status("Building compose scaffold...", 80)
+    import json as _json
+    try: cfg = _json.load(open(os.path.join(CONF_DIR, "build.conf")))
+    except: cfg = {}
     container_name = svc_name
     net_name = container_name.replace("-","_") + "_net"
+    cpuset = cfg.get("cpuset","0-15")
+    cpu_shares = cfg.get("cpu_shares",4096)
+    stop_grace = cfg.get("stop_grace_period","120s")
+    stop_signal = cfg.get("stop_signal","SIGTERM")
+    privileged = str(cfg.get("privileged",False)).lower()
+    user = cfg.get("user","0:0")
+    dns_list = cfg.get("dns",["192.168.1.114","8.8.8.8"])
+    extra_env = cfg.get("extra_env",["TZ=America/New_York"])
+    extra_vols = cfg.get("extra_volumes",[])
+    extra_labels = cfg.get("extra_labels",[])
+    do_blkio = cfg.get("blkio",True)
+    do_ulimits = cfg.get("ulimits",True)
+    do_deploy = cfg.get("deploy_limits",True)
+    do_logging = cfg.get("logging",True)
+    sab_group = cfg.get("sablier_group","") or "srvs"
+    domain = "example.com"
+    bl = []
+    bl.append(f"  # ── {container_name} ──────────────────────────────")
+    bl.append(f"  {svc_name}:")
+    if cfg.get("use_common_caps",True): bl.append("    <<: *common-caps")
+    bl.append(f"    image: {image}")
+    bl.append(f"    container_name: {container_name}")
+    bl.append(f"    hostname: {container_name}")
+    bl.append(f"    domainname: {container_name}.{domain}")
+    bl.append(f'    cpuset: "{cpuset}"')
+    bl.append(f"    cpu_shares: {cpu_shares}")
+    bl.append(f"    stop_grace_period: {stop_grace}")
+    bl.append(f"    stop_signal: {stop_signal}")
+    bl.append(f"    privileged: {privileged}")
+    bl.append(f'    user: "{user}"')
+    if do_blkio: bl.append("    blkio_config: {weight: 500, device_read_bps: [{path: /dev/nvme0n1, rate: 500mb}], device_write_bps: [{path: /dev/nvme0n1, rate: 500mb}]}")
+    if do_ulimits: bl.append("    ulimits: {memlock: {soft: -1, hard: -1}, nofile: {soft: 65535, hard: 65535}, nproc: 65535}")
+    if do_deploy: bl.append("    deploy: {placement: {constraints: [node.labels.priority == high]}, resources: {limits: {memory: 1G, cpus: '0.2', pids: 1000}, reservations: {memory: 100M, cpus: '0.05'}}}")
+    bl.append("    storage_opt: {size: 10G}")
+    if do_logging:
+        bl.append("    logging:")
+        bl.append("      driver: json-file")
+        bl.append("      options: {max-size: 10m, max-file: '3'}")
+    bl.append("    dns:")
+    for d in dns_list: bl.append(f"      - {d}")
+    if extra_env:
+        bl.append("    environment:")
+        for e in extra_env: bl.append(f"      - {e}")
+    if extra_vols:
+        bl.append("    volumes:")
+        for v in extra_vols: bl.append(f"      - {v}")
+    bl.append("    networks:")
+    bl.append(f"      {net_name}:")
+    bl.append(f"        ipv4_address: {svc_ip}")
+    bl.append("      traefik_net:")
+    bl.append("        priority: 1000")
+    bl.append("    labels:")
+    bl.append('      - "traefik.enable=true"')
+    bl.append(f'      - "traefik.http.routers.{svc_name}.rule=Host(`{svc_name}.{domain}`)"')
+    bl.append(f'      - "traefik.http.services.{svc_name}.loadbalancer.server.port={svc_port}"')
+    bl.append('      - "sablier.enable=true"')
+    bl.append(f'      - "sablier.group={sab_group}"')
+    for el in extra_labels: bl.append(f'      - "{el}"')
+    bl.append("")
+    block = "\n".join(bl) + "\n"
 
-    block = "\n".join([
-        f"  # ── {container_name} ──────────────────────────────────────────",
-        f"  {svc_name}:",
-        f"    <<: *common-caps",
-        f"    image: {image}",
-        f"    container_name: {container_name}",
-        f"    hostname: {container_name}",
-        f"    domainname: {container_name}.example.com",
-        f"    networks:",
-        f"      {net_name}:",
-        f"        ipv4_address: {svc_ip}",
-        f"      traefik_net:",
-        f"        priority: 1000",
-        f"    labels:",
-        f'      - "traefik.enable=true"',
-        f'      - "traefik.http.routers.{svc_name}.rule=Host(`{svc_name}.example.com`)"',
-        f'      - "traefik.http.services.{svc_name}.loadbalancer.server.port={svc_port}"',
-        f'      - "sablier.enable=true"',
-        f'      - "sablier.group=srvs"',
-    ]) + "\n"
 
     # Inject into stack
     fpath = os.path.join(STACKS_DIR, target_stack + ".yml")
