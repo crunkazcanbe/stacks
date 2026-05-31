@@ -1889,6 +1889,19 @@ def main():
                 total += 1
 
     # ── Phase 0.5: Corruption repair ────────────────────────────────────────
+    # Uses stacks_repair.py — learned from dev_1.yml reference file
+    import importlib.util as _ilu
+    _rspec = _ilu.spec_from_file_location("stacks_repair", "/usr/local/lib/stacks_repair.py")
+    _rmod = _ilu.module_from_spec(_rspec)
+    _rspec.loader.exec_module(_rmod)
+    for _rf in files:
+        _rfixes = _rmod.repair_file(_rf, dry_run=dry_run)
+        if _rfixes:
+            for _fix in _rfixes:
+                pr(f"  {G}✔ {_os.path.basename(_rf)}: {_fix}{X}")
+            total += len(_rfixes)
+
+    # ── Phase 0.5b: Legacy corruption repair ─────────────────────────────────
     # Fixes known corruption patterns from label injection bugs:
     # 1. Label lines injected into networks: block
     # 2. HC test values leaked into blkio_config
