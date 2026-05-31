@@ -294,22 +294,41 @@ def run_sequence_popup(stdscr, title, steps):
         except: pass
     stdscr.clear(); stdscr.refresh()
     cancelled=False
+    LOG_DIR = "/srv/stacks"
     for i,(slabel,cmd) in enumerate(steps):
         draw(i,slabel)
-        proc=subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,bufsize=1)
+        # Detect which log file this command writes to
+        log_file = None
+        for word in ["up","down","fix","repair","restart","scale","proxy"]:
+            if f"stacks {word}" in cmd or f"stacks_repair" in cmd:
+                log_file = f"{LOG_DIR}/stacks_{word}.log"
+                break
+        proc=subprocess.Popen(cmd,shell=True,
+            stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        # Tail the log file while command runs
+        log_pos = 0
+        if log_file and os.path.exists(log_file):
+            try: log_pos = os.path.getsize(log_file)
+            except: log_pos = 0
         try:
-            for raw in proc.stdout:
-                line=re.sub(r"\x1b[^a-zA-Z]*[a-zA-Z]","",raw)
-                line=re.sub(r"[\x00-\x1f\x7f]","",line).strip()
-                cleaned = clean_log_line(line)
-                if cleaned:
-                    last_log[0] = cleaned
+            while proc.poll() is None:
+                # Read new log lines
+                if log_file and os.path.exists(log_file):
+                    try:
+                        with open(log_file) as lf:
+                            lf.seek(log_pos)
+                            for raw in lf:
+                                log_pos += len(raw.encode())
+                                cleaned = clean_log_line(raw)
+                                if cleaned:
+                                    last_log[0] = cleaned
+                    except: pass
                 frame += 1
                 draw(i, slabel)
-                _t.sleep(0.08)
+                _t.sleep(0.1)
                 k = popup.getch()
-                if k in (27, ord("q"), ord("Q")): proc.terminate(); cancelled=True; break
-            if cancelled: break
+                if k in (27, ord("q"), ord("Q")):
+                    proc.terminate(); cancelled=True; break
         except KeyboardInterrupt: proc.terminate(); cancelled=True
         proc.wait()
         if cancelled: break
