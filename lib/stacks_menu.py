@@ -243,14 +243,19 @@ def clean_log_line(raw):
     line = _re.sub(r'\x1b[^a-zA-Z]*[a-zA-Z]', '', raw)
     line = _re.sub(r'[\x00-\x1f\x7f]', '', line).strip()
     if not line or len(line) < 3: return ''
+    # Block chars and art
     if _re.search(r'[░█]{2,}|Press Ctrl|===|____|\\___|/ ___', line): return ''
     if _re.match(r'^[\s_/\\|.=\[\](){}#*\-]+$', line): return ''
     if _re.match(r'^[\[\]#>\-\s\d%]+$', line): return ''
-    # Filter countdown/timer lines like "... 30 seconds remaining ..."
+    # Countdown/timer lines
     if _re.search(r'\d+\s+seconds? remaining', line): return ''
     if _re.match(r'^\[\d{2}:\d{2}:\d{2}\]\s+\.\.\.\s+\d+', line): return ''
-    # Filter sablier restart lines
-    if 'Restarting sablier' in line.lower(): return ''
+    # Sablier/watchdog noise
+    if _re.search(r'sablier|watchdog|Restarting|-> Restart', line, _re.IGNORECASE): return ''
+    # Lines with emoji/icons (non-ASCII symbols used as decorators)
+    if _re.search(r'[\U00002500-\U00002BFF\U0001F000-\U0001FFFF]', line): return ''
+    # Only keep lines with actual words
+    if not _re.search(r'[a-zA-Z]{3,}', line): return ''
     return line
 
 def run_sequence_popup(stdscr, title, steps):
