@@ -338,6 +338,10 @@ def _bw_input(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
                 break
             elif ch == 27:  # ESC = go back
                 return None
+            elif ch == 3:  # Ctrl+C = go back
+                return None
+            elif ch == curses.KEY_F1:  # F1 = go back
+                return None
             elif ch in (curses.KEY_BACKSPACE, 127, 8):
                 if val: val.pop()
             elif 32 <= ch <= 126:
@@ -353,7 +357,7 @@ def _bw_input(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         return result if result else default
     except:
         curses.curs_set(0)
-        return default
+        return None  # any error = treat as ESC/back
 
 
 def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
@@ -392,6 +396,8 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
             if sel >= scroll + visible: scroll = sel - visible + 1
         elif k in (10, 13): return items[sel]
         elif k == 27: return None
+        elif k == 3: return None  # Ctrl+C = back
+        elif k == curses.KEY_F1: return None
 
 
 def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame):
@@ -423,6 +429,8 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         elif k in (ord("y"), ord("Y")): return "y"
         elif k in (ord("n"), ord("N")): return "n"
         elif k == 27: return None
+        elif k == 3: return None  # Ctrl+C = back
+        elif k == curses.KEY_F1: return None
 
 
 def _bw_status(popup, pw, ph, msg, bar_w, pct, title, spinner, frame):
@@ -1147,7 +1155,7 @@ def _bw_input(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         return result if result else default
     except:
         curses.curs_set(0)
-        return default
+        return None  # any error = treat as ESC/back
 
 
 def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
@@ -1186,6 +1194,8 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
             if sel >= scroll + visible: scroll = sel - visible + 1
         elif k in (10, 13): return items[sel]
         elif k == 27: return None
+        elif k == 3: return None  # Ctrl+C = back
+        elif k == curses.KEY_F1: return None
 
 
 def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame):
@@ -1217,6 +1227,8 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         elif k in (ord("y"), ord("Y")): return "y"
         elif k in (ord("n"), ord("N")): return "n"
         elif k == 27: return None
+        elif k == 3: return None  # Ctrl+C = back
+        elif k == curses.KEY_F1: return None
 
 
 def _bw_status(popup, pw, ph, msg, bar_w, pct, title, spinner, frame):
