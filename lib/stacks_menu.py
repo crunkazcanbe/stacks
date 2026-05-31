@@ -277,7 +277,7 @@ def run_sequence_popup(stdscr, title, steps):
             popup.clear()
             draw_border_box(popup,0,0,ph,pw,f" {title[:pw-4]} ")
             if done: pct=100
-            else: pct=max(1,min(99,int(((idx/total)*100)+(frame%30))))
+            else: pct=min(99,int((idx/total)*99)+1)
             filled=int(bar_w*pct/100)
             bar="█"*filled+"░"*(bar_w-filled)
             # Log line - clean text only
