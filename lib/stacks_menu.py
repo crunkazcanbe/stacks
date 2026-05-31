@@ -276,7 +276,8 @@ def run_sequence_popup(stdscr, title, steps):
         try:
             popup.clear()
             draw_border_box(popup,0,0,ph,pw,f" {title[:pw-4]} ")
-            pct=100 if done else int((idx/total)*100)
+            if done: pct=100
+            else: pct=max(1,min(99,int(((idx/total)*100)+(frame%30))))
             filled=int(bar_w*pct/100)
             bar="█"*filled+"░"*(bar_w-filled)
             # Log line - clean text only
@@ -323,6 +324,7 @@ def run_sequence_popup(stdscr, title, steps):
         log_positions = get_log_positions()
         proc=subprocess.Popen(cmd,shell=True,
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        log_positions = get_log_positions()
         try:
             while proc.poll() is None:
                 new_lines = read_new_log_lines(log_positions)
