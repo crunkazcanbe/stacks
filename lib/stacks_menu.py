@@ -771,6 +771,7 @@ networks:
     start_action = sel("Start now?", [
         f"Start just {container_name}",
         f"Start whole stack: {target_stack}",
+        f"Pull image only: {image}",
         "Don't start yet",
     ])
     pct[0] = 95
@@ -778,6 +779,8 @@ networks:
     if start_action and "Don't" not in start_action:
         if "whole stack" in start_action:
             run_log_popup(stdscr, f"Up {target_stack}", f"{STACKS_BIN} up {target_stack}")
+        elif "Pull image" in start_action:
+            run_log_popup(stdscr, f"Pull {image}", f"docker pull {image}")
         else:
             run_log_popup(stdscr, f"Start {container_name}",
                          f"docker compose -f {fpath} up -d {svc_name}")
