@@ -388,6 +388,8 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
                 except: pass
         popup.refresh()
         k = popup.getch()
+        if k == curses.KEY_RESIZE: continue
+        if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_UP:
             if sel > 0: sel -= 1
             if sel < scroll: scroll = sel
@@ -424,6 +426,8 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         except: pass
         popup.refresh()
         k = popup.getch()
+        if k == curses.KEY_RESIZE: continue
+        if k == curses.KEY_MOUSE: continue
         if k in (curses.KEY_LEFT, curses.KEY_RIGHT): sel = 1 - sel
         elif k in (10, 13): return "y" if sel==0 else "n"
         elif k in (ord("y"), ord("Y")): return "y"
@@ -1186,6 +1190,8 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
                 except: pass
         popup.refresh()
         k = popup.getch()
+        if k == curses.KEY_RESIZE: continue
+        if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_UP:
             if sel > 0: sel -= 1
             if sel < scroll: scroll = sel
@@ -1222,6 +1228,8 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         except: pass
         popup.refresh()
         k = popup.getch()
+        if k == curses.KEY_RESIZE: continue
+        if k == curses.KEY_MOUSE: continue
         if k in (curses.KEY_LEFT, curses.KEY_RIGHT): sel = 1 - sel
         elif k in (10, 13): return "y" if sel==0 else "n"
         elif k in (ord("y"), ord("Y")): return "y"
@@ -1520,6 +1528,8 @@ Mounts: {{len .Mounts}} volumes''',
         except: pass
         popup.refresh()
         k = popup.getch()
+        if k == curses.KEY_RESIZE: continue
+        if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_UP: scroll = max(0, scroll-1)
         elif k == curses.KEY_DOWN: scroll = min(max(0,len(lines)-visible), scroll+1)
         elif k in (27, ord('q')): break
@@ -1939,6 +1949,7 @@ def main(stdscr):
         k = stdscr.getch()
         if k == -1: continue
         if k == curses.KEY_RESIZE:
+            h, w = stdscr.getmaxyx()
             stdscr.clear()
             continue
 
