@@ -1336,12 +1336,16 @@ def draw_containers_tab(win, h, w, containers, sel, scroll):
             except: pass
 
 def draw_stacks_tab(win, h, w, stacks, sel, scroll):
-    win.addstr(3, 2, f'{"STACK":<18} {"RUN/TOT":<7} {"SIZE":>5}  {"STATUS":<10}',
-               curses.color_pair(C_ACCENT))
-    win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
+    try:
+        win.addstr(3, 2, "[ A ] All-Stacks Actions", curses.color_pair(C_ACCENT))
+        win.addstr(4, 2, f'{"STACK":<18} {"RUN/TOT":<8} {"FILE":>5}  {"IMG SIZE":>9}  {"RAM":>8}  {"STATUS"}',
+                   curses.color_pair(C_YELLOW))
+        win.addstr(5, 2, '─' * (w-4), curses.color_pair(C_DIM))
+    except: pass
 
-    visible = h - 7
+    visible = h - 8
     items = stacks[scroll:scroll+visible]
+
 
     for i, s in enumerate(items):
         y = 5 + i
