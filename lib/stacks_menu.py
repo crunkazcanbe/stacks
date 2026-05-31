@@ -334,7 +334,6 @@ def run_sequence_popup(stdscr, title, steps):
                 k = popup.getch()
                 if k == curses.KEY_MOUSE: continue
                 if k == 27: proc.terminate(); cancelled=True; break
-                    proc.terminate(); cancelled=True; break
         except KeyboardInterrupt: proc.terminate(); cancelled=True
         proc.wait()
         if cancelled: break
