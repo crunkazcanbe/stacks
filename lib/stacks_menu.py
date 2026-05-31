@@ -1734,16 +1734,16 @@ def draw_build_tab(win, h, w, sel=0):
             except: pass
 
 CONFIG_FILES = [
-    ("stacks.conf",              "stacks.conf"),
-    ("build.conf",               "build.conf"),
-    ("service_descriptions.conf","service_descriptions.conf"),
-    ("all_services.conf",        "all_services.conf"),
-    ("global_inject.conf",       "global_inject.conf"),
-    ("menu.conf",           "menu.conf"),
-    ("stack_urls.conf",          "stack_urls.conf"),
-    ("backup.conf",              "backup.conf"),
-    ("art.conf",            "art.conf"),
+    ("stacks.conf",          "stacks.conf"),
+    ("build.conf",           "build.conf"),
+    ("all_services.txt",     "all_services.txt"),
+    ("global_inject.conf",   "global_inject.conf"),
+    ("menu.conf",       "menu.conf"),
+    ("stack_urls.conf",      "stack_urls.conf"),
+    ("backup.conf",          "backup.conf"),
+    ("art.conf",        "art.conf"),
 ]
+DESCRIPTIONS_DIR = os.path.expanduser("~/.config/stacks/descriptions")
 
 def draw_configs_tab(win, h, w, sel):
     try:
