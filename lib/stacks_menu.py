@@ -598,7 +598,17 @@ def draw_build_tab(win, h, w):
         win.addstr(6+i, 4, f'[{key}]', curses.color_pair(C_ACCENT))
         win.addstr(6+i, 9, desc, curses.color_pair(C_NORMAL))
 
+CONFIG_FILES = [
+    ("stacks.conf",        "stacks.conf"),
+    ("global_inject.conf", "global_inject.conf"),
+    ("menu.conf",     "menu.conf"),
+    ("stack_urls.conf",    "stack_urls.conf"),
+    ("backup.conf",        "backup.conf"),
+    ("build.conf",         "build.conf"),
+]
+
 def draw_configs_tab(win, h, w, sel):
+
     win.addstr(3, 2, 'CONFIGS', curses.color_pair(C_ACCENT))
     win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
     for i, (label, _) in enumerate(CONFIG_FILES):
