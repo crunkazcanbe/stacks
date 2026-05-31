@@ -51,6 +51,7 @@ app_data = {
     "stacks": [],       # [{name, running, stopped, missing, total}]
     "containers": [],   # [{name, status, image, stack}]
     "mem_stats": {},    # {container_name: "used / limit"}
+    "img_sizes": {},    # {image: "size"}
     "last_update": 0,
 }
 
@@ -111,7 +112,7 @@ def get_containers():
     return running + others
 
 def fetch_mem_stats():
-    """Fetch docker stats in background - slow but non-blocking."""
+    """Fetch docker stats and image sizes in background."""
     while True:
         try:
             r = subprocess.run(
@@ -126,6 +127,20 @@ def fetch_mem_stats():
                         mem[n.strip()] = m.strip()
                 with data_lock:
                     app_data['mem_stats'] = mem
+        except: pass
+        # Fetch image sizes
+        try:
+            r2 = subprocess.run(
+                ['docker','images','--format','{{.Repository}}:{{.Tag}}\t{{.Size}}'],
+                capture_output=True, text=True, timeout=10)
+            if r2.returncode == 0:
+                imgs = {}
+                for line in r2.stdout.strip().split('\n'):
+                    if '\t' in line:
+                        img, sz = line.split('\t', 1)
+                        imgs[img.strip()] = sz.strip()
+                with data_lock:
+                    app_data['img_sizes'] = imgs
         except: pass
         time.sleep(15)
 
@@ -1280,7 +1295,7 @@ def do_container_action(stdscr, container_name, stack_file, action):
 TABS = ['Containers', 'Stacks', 'Logs', 'Dynamics', 'Art', 'Backup', 'Build', 'Configs']
 
 def draw_containers_tab(win, h, w, containers, sel, scroll):
-    win.addstr(3, 2, f'{"NAME":<29} {"STATUS":<10} {"MEMORY":<16} {"IMAGE":<20}',
+    win.addstr(3, 2, f'{"NAME":<27} {"STATUS":<12} {"MEMORY":<19} {"SIZE":<9} {"IMAGE"}',
                curses.color_pair(C_ACCENT))
     win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
 
@@ -1301,17 +1316,20 @@ def draw_containers_tab(win, h, w, containers, sel, scroll):
         color = C_RUNNING if is_running else C_STOPPED
         indicator = '●' if is_running else '○'
 
-        mem = app_data['mem_stats'].get(c.get('name',''), '')[:16]
-        line = f'{indicator} {name:<28} {status:<10} {mem:<16} {image}'
+        mem = app_data['mem_stats'].get(c.get('name',''), '')[:18]
+        img_sz = app_data['img_sizes'].get(image, app_data['img_sizes'].get(image.split(':')[0]+':latest',''))[:8]
         if idx == sel:
+            line = f'{indicator} {name:<26} {status:<12} {mem:<19} {img_sz:<9} {image}'
             try: win.addstr(y, 2, line[:w-4], curses.color_pair(C_SELECTED))
             except: pass
         else:
             try:
                 win.addstr(y, 2, f'{indicator} ', curses.color_pair(color))
-                win.addstr(y, 4, f'{name:<28} {status:<10} ', curses.color_pair(C_NORMAL))
-                win.addstr(y, 44, f'{mem:<16}', curses.color_pair(C_YELLOW if mem else C_DIM))
-                win.addstr(y, 60, f'{image}'[:w-62], curses.color_pair(C_DIM))
+                win.addstr(y, 4, f'{name:<26}', curses.color_pair(C_NORMAL))
+                win.addstr(y, 31, f'{status:<12}', curses.color_pair(C_DIM))
+                win.addstr(y, 43, f'{mem:<19}', curses.color_pair(C_YELLOW if mem else C_DIM))
+                win.addstr(y, 62, f'{img_sz:<9}', curses.color_pair(C_CYAN if img_sz else C_DIM))
+                win.addstr(y, 71, f'{image}'[:w-73], curses.color_pair(C_DIM))
             except: pass
 
 def draw_stacks_tab(win, h, w, stacks, sel, scroll):
