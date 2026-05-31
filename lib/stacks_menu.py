@@ -273,7 +273,6 @@ def run_sequence_popup(stdscr, title, steps):
         except: pass
     stdscr.clear(); stdscr.refresh()
     cancelled=False
-    bad=re.compile(r"[\x1b\x00-\x1f\x7f]|[░█]{2,}|Press Ctrl|===")
     for i,(slabel,cmd) in enumerate(steps):
         draw(i,slabel)
         proc=subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,bufsize=1)
@@ -282,11 +281,9 @@ def run_sequence_popup(stdscr, title, steps):
                 line=re.sub(r"\x1b[^a-zA-Z]*[a-zA-Z]","",raw)
                 line=re.sub(r"[\x00-\x1f\x7f]","",line).strip()
                 # Skip stacks art, loading bar chars, short noise
-                if (line and not bad.search(line)
-                    and not re.match(r"^[\[\]#>\-\|\s\d%]+$",line)
-                    and len(line) > 3
-                    and not all(c in " _/\\|.-=[](){}#*" for c in line)):
-                    last_log[0]=line
+                cleaned = clean_log_line(line)
+                if cleaned:
+                    last_log[0] = cleaned
                     frame+=1; draw(i,slabel)
                 _t.sleep(0.08)
                 k=popup.getch()
