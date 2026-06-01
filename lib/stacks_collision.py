@@ -256,14 +256,14 @@ def get_collisions():
 
     ip_collisions = []
     for ip, owners in ip_map.items():
-        if len(owners) > 1:
-            ip_collisions.append({"ip": ip, "owners": owners, "type": "duplicate"})
-        elif ip in blacklist_ips:
+        # IP sharing is OK - only flag blacklisted IPs
+        if ip in blacklist_ips:
             ip_collisions.append({"ip": ip, "owners": owners, "type": "blacklisted"})
 
     port_collisions = []
     for key, owners in port_map.items():
         ip, port = key.split(":", 1)
+        # Same IP:PORT used by multiple containers = real collision
         if len(owners) > 1:
             port_collisions.append({"ip": ip, "port": port, "owners": owners, "type": "duplicate"})
         elif port in blacklist_ports:
