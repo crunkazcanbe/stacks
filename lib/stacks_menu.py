@@ -1020,7 +1020,11 @@ def run_build_wizard(stdscr, new_stack=False):
                     draw_border_box(popup, 0, 0, ph, pw, f" {title[:pw-4]} ")
                     popup.refresh()
                     curses.flushinp()
-                    _chosen = sel("Add to which stack?", _creators)
+                    try:
+                        _chosen = sel("Add to which stack?", _creators)
+                    except Exception as _se:
+                        import traceback
+                        _chosen = None
                     curses.flushinp()
                     state["creator_stack"] = "new" if (not _chosen or _chosen == "\u2795 Create new") else _chosen
                 else:
@@ -1152,6 +1156,7 @@ def run_build_wizard(stdscr, new_stack=False):
     for el in extra_labels: bl.append(f'      - "{el}"')
 
     # ── Add DB companion service if selected ──────────────────
+    fpath = os.path.join(STACKS_DIR, target_stack + ".yml")
     if db_info and db_info.get("type") and db_info["type"] != "none":
         _dt = db_info["type"]
         _dn = db_info["name"]
