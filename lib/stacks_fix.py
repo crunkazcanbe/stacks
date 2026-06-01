@@ -97,7 +97,7 @@ def load_conf():
                     continue
                 k, v = line.split("=", 1)
                 k = k.strip()
-                v = v.strip().strip('"').strip("'")
+                v = v.split("#")[0].strip().strip('"').strip("'")
                 if k in cfg:
                     cfg[k] = v
         except Exception as e:
