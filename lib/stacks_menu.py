@@ -167,16 +167,60 @@ def draw_header(win, title, w):
         win.attroff(curses.color_pair(C_HEADER))
     except: pass
 
+# ── Tab Registration Helper ──────────────────────────────────────────────────
+# Use register_tab(name) to add a new tab to the TUI.
+# Then add: draw function, key handler (elif tab == N), footer hints.
+# Example: register_tab("MyTab") → adds to TABS list at runtime
+# ✔ draw_<name>_tab(win, h, w, sel) — draw function
+# ✔ elif tab == N: — key handler in main loop
+# ✔ N: ['hints'] — add to FOOTER_HINTS dict
+def register_tab(name):
+    """Register a new tab. Call before main() runs. Returns tab index."""
+    if name not in TABS:
+        TABS.append(name)
+    return TABS.index(name)
+
 def draw_tabs(win, y, w, tabs, active):
-    win.addstr(y, 0, ' ' * w, curses.color_pair(C_DIM))
-    x = 2
-    for i, tab in enumerate(tabs):
-        label = f'  {tab}  '
-        if i == active:
-            win.addstr(y, x, label, curses.color_pair(C_SELECTED))
-        else:
-            win.addstr(y, x, label, curses.color_pair(C_DIM))
-        x += len(label) + 1
+    """Draw tab bar. Scrolls to keep active tab visible if too many tabs."""
+    try: win.addstr(y, 0, ' ' * w, curses.color_pair(C_DIM))
+    except: pass
+    # Calculate visible window around active tab
+    total_w = sum(len(f'  {t}  ') + 1 for t in tabs)
+    if total_w <= w:
+        # All tabs fit
+        x = 2
+        for i, tab in enumerate(tabs):
+            label = f'  {tab}  '
+            if x + len(label) > w - 2: break
+            try:
+                if i == active:
+                    win.addstr(y, x, label, curses.color_pair(C_SELECTED))
+                else:
+                    win.addstr(y, x, label, curses.color_pair(C_DIM))
+            except: pass
+            x += len(label) + 1
+    else:
+        # Scroll: show tabs around active
+        # Find start tab to show active
+        start = max(0, active - 3)
+        x = 2
+        if start > 0:
+            try: win.addstr(y, x, '◀', curses.color_pair(C_DIM))
+            except: pass
+            x += 2
+        for i in range(start, len(tabs)):
+            label = f' {tabs[i]} '
+            if x + len(label) + 3 > w - 2:
+                try: win.addstr(y, x, '▶', curses.color_pair(C_DIM))
+                except: pass
+                break
+            try:
+                if i == active:
+                    win.addstr(y, x, label, curses.color_pair(C_SELECTED))
+                else:
+                    win.addstr(y, x, label, curses.color_pair(C_DIM))
+            except: pass
+            x += len(label) + 1
 
 def draw_footer(win, h, w, hints):
     msg = '  '.join(hints)
@@ -1626,7 +1670,7 @@ def do_container_action(stdscr, container_name, stack_file, action):
     run_log_popup(stdscr, f'{action} → {container_name}', cmd)
 
 # ── Tab views ────────────────────────────────────────────────────────────────
-TABS = ['Containers', 'Stacks', 'Logs', 'Dynamics', 'Art', 'Backup', 'Build', 'Configs']
+TABS = ['Containers', 'Stacks', 'Logs', 'Dynamics', 'Art', 'Backup', 'Build', 'Configs', 'Network', 'Updates']
 
 def draw_containers_tab(win, h, w, containers, sel, scroll):
     win.addstr(3, 2, f'{"NAME":<26} {"STATUS":<12} {"MEMORY":<19} {"SIZE":<9} {"IMAGE"}',
