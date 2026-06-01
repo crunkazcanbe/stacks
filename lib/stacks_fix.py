@@ -953,15 +953,6 @@ def inject_depends_on(fpath, cfg):
                     line_num = content[:content.find(f"container_name: {cname}")].count("\n")
                     insert_after = line_num + 1
 
-                lines = lines[:insert_after+1] + dep_lines + lines[insert_after+1:]
-                content = "".join(lines)
-                notes.append(f"depends_on: {cname} -> {dep_list}")
-
-        if notes:
-            open(fpath, "w").writelines(lines)
-    except Exception as e:
-        notes.append(f"depends_on error: {e}")
-    return notes
 
 # ── Network/volume definition templates ────────────────────────────────────────
 def net_definition(name, octet, subnet_base):
