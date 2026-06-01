@@ -105,7 +105,15 @@ def build_families(containers):
         if not supports:
             roots = set(root(m) for m in members)
             if len(roots) > 1: continue
-        new_head = min(apps, key=lambda x: (len(x), x))
+        # Prefer names ending in common "main app" patterns
+        def head_score(n):
+            parts = n.replace(".","-").split("-")
+            last = parts[-1]
+            # Penalize support-like suffixes even if not in DB_WORDS
+            penalty = {"indexer":3,"dashboard":2,"generator":4,
+                       "certs":4,"cert":4,"worker":3,"web":1}.get(last,0)
+            return (len(n) + penalty, n)
+        new_head = min(apps, key=head_score)
         result[new_head] = members
     return result
 
