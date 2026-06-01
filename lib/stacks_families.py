@@ -13,6 +13,8 @@ STACKS_DIR = "/srv/stacks/Stacks"
 GLOBAL_NETS = {'traefik_net','apartment_net','bridge','host','none',
                'ingress','docker_gwbridge'}
 SKIP_CONTAINERS = {'provisioner','adminer','surrealist','cloudbeaver'}
+# Infrastructure containers that should never be family heads
+INFRA_SKIP = {'traefik','sablier','crowdsec-bouncer','error-pages'}
 DB_WORDS = {'db','redis','cache','postgres','mysql','mongo','mariadb',
             'worker','celery','cron','realtime','beat','scheduler',
             'daemon','rabbitmq','memcached','valkey','indexer'}
@@ -99,6 +101,7 @@ def build_families(containers):
     for head, members in groups.items():
         if len(members) < 2: continue
         if any(s in head for s in SKIP_CONTAINERS): continue
+        if new_head in INFRA_SKIP: continue
         apps = [m for m in members if not is_support(m)]
         supports = [m for m in members if is_support(m)]
         if not apps: continue
@@ -114,6 +117,7 @@ def build_families(containers):
                        "certs":4,"cert":4,"worker":3,"web":1}.get(last,0)
             return (len(n) + penalty, n)
         new_head = min(apps, key=head_score)
+        if new_head in INFRA_SKIP: continue
         result[new_head] = members
     return result
 
