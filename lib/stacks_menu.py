@@ -768,6 +768,10 @@ def _registry_search_inner(stdscr, term, bar_w, pct, title, spinner, frame):
 def run_build_wizard(stdscr, new_stack=False):
     """Full curses build wizard with back navigation."""
     import subprocess as _sp, glob as _gl, time as _t
+    import sys as _bwsys
+    _bw_log = open("/tmp/build_crash.log", "w")
+    def _bwlog(msg):
+        _bw_log.write(msg + "\n"); _bw_log.flush()
     h, w = stdscr.getmaxyx()
     pw = min(w-4, 74); ph = 14
     py = (h-ph)//2; px = (w-pw)//2
@@ -829,7 +833,7 @@ def run_build_wizard(stdscr, new_stack=False):
         except: stacks_display.append(_s)
 
     step = 0
-    STEPS = ["stack", "image", "name", "ip", "port", "db", "redis", "companion", "start"]
+    STEPS = ["stack", "image", "name", "ip", "port", "db", "redis", "companion", "netvol", "start"]
 
     while True:
         current = STEPS[step] if step < len(STEPS) else "done"
@@ -991,6 +995,7 @@ def run_build_wizard(stdscr, new_stack=False):
                     state["companion_info"] = {"name":comp_name,"image":comp_img,"stack":comp_stack or state["target_stack"]}
 
 
+        elif current == "netvol":
             # ── Network/Volume questions ──────────────────────────────
             pct[0] = 75
             wants_netvol = yn("Auto-create network & volume for this container?", "y")
