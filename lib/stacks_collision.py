@@ -55,70 +55,57 @@ def is_port_free_on_host(ip, port):
 # ── Related container grouping ────────────────────────────────────────────────
 def get_related_containers(fpath):
     """
-    Parse a compose file and group containers that reference each other.
-    Containers with depends_on, links, or shared env vars (DB_HOST, REDIS_HOST etc)
-    should share the same IP.
-    Returns list of sets, each set = group of related container names.
-    ✔ Used to keep app + db + redis on same IP
+    Parse compose file and group containers that reference each other.
+    Returns list of sets, each set = related container names that should share an IP.
+    Uses depends_on and common env vars (DB_HOST, REDIS_HOST etc).
     """
     groups = []
     try:
-        content = open(fpath).read()
-        # Find all services
-        services = re.findall(r'^\s{2}(\S+):\s*$', content, re.MULTILINE)
-        container_names = {}
-        for svc in services:
-            pattern2 = r"  " + re.escape(svc) + r":.*?container_name:\s*(\S+)"
-            m = re.search(pattern2, content, re.DOTALL)
-
-        # Find depends_on relationships
+        data = open(fpath).read()
+        # Get all container names
+        cnames = re.findall(r'container_name:\s*(\S+)', data)
+        # Get depends_on relationships
         deps = {}
-        for svc in services:
-        pattern = r"  " + re.escape(svc) + r":(.*?)(?=\n  [a-zA-Z]|\Z)"
-        m = re.search(pattern, content, re.DOTALL)
-            if not m: continue
-            block = m.group(1)
-            dep_matches = re.findall(r'depends_on.*?(?:
-(?:    |\s{6})- (\S+)|
-\s+(\S+):\s*$)', block)
-            svc_deps = set()
-            # Also check env vars that reference other containers
-            env_refs = re.findall(r'(?:DB_HOST|REDIS_HOST|DATABASE_HOST|POSTGRES_HOST|MYSQL_HOST|MONGO_HOST)=(\S+)', block)
-            for ref in env_refs:
-                for s, cname in container_names.items():
-                    if ref == cname or ref == s:
-                        svc_deps.add(s)
-            if svc_deps: deps[svc] = svc_deps
+        for cname in cnames:
+            # Find the block for this container
+            idx = data.find('container_name: ' + cname)
+            if idx < 0: continue
+            block = data[idx:idx+2000]
+            my_deps = set()
+            # depends_on entries
+            for dep in re.findall(r'depends_on[^:]*:[^\n]*\n((?:\s+-\s+\S+\n)+)', block):
+                for d in re.findall(r'-\s+(\S+)', dep):
+                    my_deps.add(d)
+            # env var references to other containers
+            for ref in re.findall(r'(?:DB_HOST|REDIS_HOST|DATABASE_HOST|POSTGRES_HOST|MYSQL_HOST|MONGO_HOST|REDIS_URL|DATABASE_URL)=(?:https?://)?([\w.-]+)', block):
+                if ref in cnames:
+                    my_deps.add(ref)
+            if my_deps:
+                deps[cname] = my_deps
 
-        # Build groups using union-find
-        def find_group(svc, all_groups):
-            for g in all_groups:
-                if svc in g: return g
+        # Union-find grouping
+        def find_g(name):
+            for g in groups:
+                if name in g: return g
             return None
 
-        for svc, svc_deps in deps.items():
-            g = find_group(svc, groups)
+        for cname, cdeps in deps.items():
+            g = find_g(cname)
             if not g:
-                g = {svc}
+                g = {cname}
                 groups.append(g)
-            for dep in svc_deps:
-                dg = find_group(dep, groups)
+            for dep in cdeps:
+                dg = find_g(dep)
                 if dg and dg is not g:
                     g.update(dg)
                     groups.remove(dg)
                 else:
                     g.add(dep)
 
-        # Convert service names to container names
-        named_groups = []
-        for g in groups:
-            named = set()
-            for svc in g:
-                named.add(container_names.get(svc, svc))
-            if len(named) > 1:
-                named_groups.append(named)
-        return named_groups
-    except: return []
+        return [g for g in groups if len(g) > 1]
+    except Exception as e:
+        return []
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def load_conf():
