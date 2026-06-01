@@ -1895,15 +1895,19 @@ def ensure_network_in_creator_file(net_name, stacks_dir, subnet_base="10.50"):
     gateway = f"{subnet_base}.{octet}.1"
     
     prefix = net_name.replace('_net', '')
+    _n = net_name
+    _p = prefix
+    _s = subnet
+    _g = gateway
     new_entry = (
-        f"  {net_name}: {{name: {net_name}, driver: bridge, "
+        f"  {_n}: " + "{" + f"name: {_n}, driver: bridge, "
         f"attachable: true, external: false, internal: false, "
         f"enable_ipv6: false, "
-        f"labels: [\"com.stacks.network={prefix}\", "
-        f"\"com.stacks.env=production\"], "
-        f"ipam: {{driver: default, "
-        f"config: [{{subnet: {{}}, gateway: {{}}}}]}}}}}}"
-    ).format(subnet, gateway)
+        f'labels: [\"com.stacks.network={_p}\", \"'
+        f'com.stacks.env=production\"], '
+        f"ipam: " + "{" + f"driver: default, config: [" + "{" +
+        f"subnet: {_s}, gateway: {_g}" + "}]}}" + "}"
+    )
     
     # Add to creator file's networks: section
     lines = open(target).readlines()
