@@ -2179,9 +2179,11 @@ def main(stdscr):
         if k == curses.KEY_RIGHT:
             tab = (tab + 1) % len(TABS)
             sel = 0; scroll = 0
+            continue  # don't process tab-specific keys on same keypress
         elif k == curses.KEY_LEFT:
             tab = (tab - 1) % len(TABS)
             sel = 0; scroll = 0
+            continue  # don't process tab-specific keys on same keypress
 
         # Tab-specific keys
         if tab == 0:  # Containers
@@ -2372,9 +2374,7 @@ def main(stdscr):
                     run_log_popup(stdscr, 'Repair ALL', f'python3 /usr/local/lib/stacks_repair.py {STACKS_DIR}')
 
         elif tab == 8:  # Network
-            if k == curses.KEY_RIGHT:
                 tab = (tab + 1) % len(TABS); sel = 0; scroll = 0
-            elif k == curses.KEY_LEFT:
                 tab = (tab - 1) % len(TABS); sel = 0; scroll = 0
             elif k in (10, 13, ord("s"), ord("S")):
                 run_log_popup(stdscr, "Scan collisions", "python3 /usr/local/lib/stacks_collision.py")
@@ -2384,9 +2384,7 @@ def main(stdscr):
                 os.system(f'{os.environ.get("EDITOR","nano")} {os.path.expanduser("~/.config/stacks/stacks.conf")}')
                 stdscr = curses.initscr(); init_colors(); curses.curs_set(0); stdscr.clear()
         elif tab == 9:  # Updates
-            if k == curses.KEY_RIGHT:
                 tab = (tab + 1) % len(TABS); sel = 0; scroll = 0
-            elif k == curses.KEY_LEFT:
                 tab = (tab - 1) % len(TABS); sel = 0; scroll = 0
             elif k in (ord("c"), ord("C")):
                 run_log_popup(stdscr, "Check updates", "python3 /usr/local/lib/stacks_updates.py")
