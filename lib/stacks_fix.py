@@ -2263,8 +2263,14 @@ def post_build_inject_volume(fpath, svc_name, cfg=None):
         block = data[idx:idx+3000]
         nxt = _re.search(r"\n  [a-zA-Z]", block[10:])
         if nxt: block = block[:nxt.start()+10]
-        # Skip if already has volumes
-        if "volumes:" in block: return []
+        # Skip if already has a real data volume (not just shared lib mounts)
+        if "volumes:" in block:
+            import re as _re2
+            # Only skip if there's a bind mount that looks like a data dir
+            data_vols = _re2.findall(r'-\s+(/home/\S+|/data/\S+|/var/lib/\S+):', block)
+            named_vols = _re2.findall(r'-\s+\w[\w-]+:/\w', block)
+            if data_vols or named_vols:
+                return []  # has real data volume
         vol_base = cfg.get("FIX_VOLUME_BASE","/srv/stacks/docker")
         vol_path = f"{vol_base}/{svc_name}/config"
         os.makedirs(vol_path, exist_ok=True)
