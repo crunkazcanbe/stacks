@@ -101,7 +101,6 @@ def build_families(containers):
     for head, members in groups.items():
         if len(members) < 2: continue
         if any(s in head for s in SKIP_CONTAINERS): continue
-        if new_head in INFRA_SKIP: continue
         apps = [m for m in members if not is_support(m)]
         supports = [m for m in members if is_support(m)]
         if not apps: continue
