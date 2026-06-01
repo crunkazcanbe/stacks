@@ -442,7 +442,10 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
                 try: popup.addstr(y, 2, f"   {label:<{pw-6}}", curses.color_pair(C_NORMAL))
                 except: pass
         popup.refresh()
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
         if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_LEFT: return None  # left arrow = go back
@@ -483,7 +486,10 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         try: popup.addstr(ph-2, 2, "←→ Select  ENTER confirm  ESC/Ctrl+C cancel", curses.color_pair(C_DIM))
         except: pass
         popup.refresh()
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
         if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_LEFT and sel == 0: return None  # left on YES = go back
