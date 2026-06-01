@@ -971,6 +971,28 @@ def run_build_wizard(stdscr, new_stack=False):
                 if comp_img:
                     comp_stack = sel("Which stack for companion:", stacks)
                     state["companion_info"] = {"name":comp_name,"image":comp_img,"stack":comp_stack or state["target_stack"]}
+
+            # ── Network/Volume questions ──────────────────────────────
+            pct[0] = 75
+            update_title("Build [7.5/9] Networks & Volumes")
+            wants_net = yn("Auto-create network for this container?", "y")
+            if wants_net == "y":
+                ext_net = yn("External network? (recommended)", "y")
+                state["auto_network"] = True
+                state["external_network"] = (ext_net == "y")
+                # Ask: add to existing creator stack or create new?
+                import glob as _gl
+                _creator_files = sorted([os.path.basename(f).replace(".yml","")
+                    for f in _gl.glob(f"{STACKS_DIR}/*.yml")
+                    if "provisioner" in open(f).read()])
+                _creator_files.append("➕ Create new")
+                _chosen_creator = sel("Add network to which stack?", _creator_files)
+                if _chosen_creator and _chosen_creator != "➕ Create new":
+                    state["creator_stack"] = _chosen_creator
+                else:
+                    state["creator_stack"] = "new"
+            wants_vol = yn("Auto-create bind mount volume?", "y")
+            state["auto_volume"] = (wants_vol == "y")
             step += 1
 
         elif current == "start" or step >= len(STEPS):
@@ -1185,8 +1207,12 @@ def run_build_wizard(stdscr, new_stack=False):
         _sys2.path.insert(0, '/usr/local/lib')
         from stacks_fix import post_build_inject, load_conf as _lc
         _cfg = _lc()
+        if state.get("auto_network"): _cfg["BUILD_AUTO_NETWORK"] = "1"
+        if state.get("auto_volume"): _cfg["BUILD_AUTO_VOLUME"] = "1"
+        if state.get("external_network") is False: _cfg["FIX_EXTERNAL_NETWORKS"] = "0"
+        if state.get("creator_stack") == "new": _cfg["FIX_FORCE_CREATE_CREATOR"] = "1"
+        elif state.get("creator_stack"): _cfg["FIX_CREATOR_TARGET"] = state["creator_stack"]
         _notes = post_build_inject(fpath, svc_name, _cfg)
-    except Exception as _pbe:
         pass  # non-fatal, don't block build completion
 
     # Done - clear everything first
