@@ -279,7 +279,10 @@ def run_popup_action(stdscr, title, actions):
             except: pass
         popup.refresh()
 
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == curses.KEY_UP:
             sel = (sel - 1) % len(actions)
         elif k == curses.KEY_DOWN:
@@ -443,7 +446,10 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
                 except: pass
         popup.refresh()
         try:
-            k = popup.getch()
+            try:
+                k = popup.getch()
+            except curses.error:
+                k = curses.KEY_RESIZE
         except curses.error:
             k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
@@ -487,7 +493,10 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         except: pass
         popup.refresh()
         try:
-            k = popup.getch()
+            try:
+                k = popup.getch()
+            except curses.error:
+                k = curses.KEY_RESIZE
         except curses.error:
             k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
@@ -706,7 +715,10 @@ def _registry_search_inner(stdscr, term, bar_w, pct, title, spinner, frame):
         draw(loading=not search_done)
         _t.sleep(0.08)
 
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == -1: continue
         if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_RESIZE: continue
@@ -1418,7 +1430,10 @@ def _bw_select(popup, pw, ph, prompt, items, bar_w, pct, title, spinner, frame):
                 try: popup.addstr(y, 2, f"   {label:<{pw-6}}", curses.color_pair(C_NORMAL))
                 except: pass
         popup.refresh()
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
         if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_LEFT: return None  # left arrow = go back
@@ -1459,7 +1474,10 @@ def _bw_yesno(popup, pw, ph, prompt, default, bar_w, pct, title, spinner, frame)
         try: popup.addstr(ph-2, 2, "←→ Select  ENTER confirm  ESC/Ctrl+C cancel", curses.color_pair(C_DIM))
         except: pass
         popup.refresh()
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
         if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_LEFT and sel == 0: return None  # left on YES = go back
@@ -1567,7 +1585,10 @@ def run_sequence_popup(stdscr, title, steps):
                 frame += 1
                 draw(i, slabel)
                 _t.sleep(0.1)
-                k = popup.getch()
+                try:
+                    k = popup.getch()
+                except curses.error:
+                    k = curses.KEY_RESIZE
                 if k == curses.KEY_MOUSE: continue
                 if k == 27: proc.terminate(); cancelled=True; break
         except KeyboardInterrupt: proc.terminate(); cancelled=True
@@ -1760,7 +1781,10 @@ Mounts: {{len .Mounts}} volumes''',
         try: popup.addstr(ph-2, 2, "↑↓ Scroll  ENTER Select  ESC/← Cancel"[:pw-4], curses.color_pair(C_DIM))
         except: pass
         popup.refresh()
-        k = popup.getch()
+        try:
+            k = popup.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == curses.KEY_RESIZE: continue
         if k == curses.KEY_MOUSE: continue
         if k == curses.KEY_LEFT: return None  # left arrow = go back
@@ -2319,7 +2343,10 @@ def main(stdscr):
         draw_footer(stdscr, h, w, FOOTER_HINTS.get(tab, []))
         stdscr.refresh()
 
-        k = stdscr.getch()
+        try:
+            k = stdscr.getch()
+        except curses.error:
+            k = curses.KEY_RESIZE
         if k == -1: continue
         if k == curses.KEY_RESIZE:
             h, w = stdscr.getmaxyx()
