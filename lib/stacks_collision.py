@@ -55,18 +55,29 @@ def is_port_free_on_host(ip, port):
 # ── Related container grouping ────────────────────────────────────────────────
 def get_related_containers(fpath):
     """
-    Group related containers using ONLY two methods:
-    1. Shared private network (e.g. coolify_net shared by coolify+coolify-db+coolify-redis)
-    2. Name prefix match (coolify matches coolify-db, coolify-redis, coolify-realtime)
-    traefik_net is excluded as it is on every container.
+    Group related containers using multiple detection methods.
+    PRIMARY (most reliable):
+      1. Shared private network - coolify_net shared by coolify+coolify-db+coolify-redis
+      2. Name prefix - coolify matches coolify-db, coolify-redis, coolify-realtime
+    SECONDARY (supporting signals):
+      3. depends_on declarations
+      4. Env vars pointing to other containers (DATABASE_URL, REDIS_HOST etc)
+      5. URL references in env (http://container-name:port)
+    traefik_net excluded as it is present on every container.
     Returns list of sets of related container names.
     """
     groups = []
     try:
         data = open(fpath).read()
         cnames = [c.strip('"'') for c in re.findall(r'container_name:\s*(\S+)', data)]
-        if not cnames:
-            return []
+        if not cnames: return []
+
+        # Build info blocks per container
+        info = {}
+        for cname in cnames:
+            idx = data.find('container_name: ' + cname)
+            if idx < 0: continue
+            info[cname] = data[idx:idx+3000]
 
         def find_g(name):
             for g in groups:
@@ -74,28 +85,24 @@ def get_related_containers(fpath):
             return None
 
         def merge(a, b):
-            if a == b: return
+            if a == b or a not in cnames or b not in cnames: return
             ga, gb = find_g(a), find_g(b)
-            if ga is None and gb is None:
-                groups.append({a, b})
+            if ga is None and gb is None: groups.append({a, b})
             elif ga is None: gb.add(a)
             elif gb is None: ga.add(b)
-            elif ga is not gb:
-                ga.update(gb); groups.remove(gb)
+            elif ga is not gb: ga.update(gb); groups.remove(gb)
 
-        # Method 1: Shared private network only
+        GLOBAL_NETS = {
+            'traefik_net','apartment_net','bridge','host',
+            'none','ingress','docker_gwbridge'
+        }
+
+        # ── PRIMARY 1: Shared private network ────────────────────────────────
         net_members = {}
-        for cname in cnames:
-            idx = data.find('container_name: ' + cname)
-            if idx < 0: continue
-            block = data[idx:idx+3000]
-            nets = re.findall(r'(\w+_net)\s*:', block)
-            for net in nets:
-                # Skip global networks
-                if net in ('traefik_net','apartment_net','bridge','host','none','ingress'):
-                    continue
-                if net not in net_members:
-                    net_members[net] = []
+        for cname, block in info.items():
+            for net in re.findall(r'(\w+_net)\s*:', block):
+                if net in GLOBAL_NETS: continue
+                net_members.setdefault(net, [])
                 if cname not in net_members[net]:
                     net_members[net].append(cname)
         for net, members in net_members.items():
@@ -103,14 +110,51 @@ def get_related_containers(fpath):
                 for m in members[1:]:
                     merge(members[0], m)
 
-        # Method 2: Name prefix
-        # Only merge if one name is a prefix of the other (with separator)
+        # ── PRIMARY 2: Name prefix ────────────────────────────────────────────
         for i, c1 in enumerate(cnames):
             for c2 in cnames[i+1:]:
-                short, long = (c1, c2) if len(c1) <= len(c2) else (c2, c1)
-                # Check if short is a prefix of long with separator
-                if long.startswith(short + '-') or long.startswith(short + '_'):
+                short, long = (c1,c2) if len(c1)<=len(c2) else (c2,c1)
+                if long.startswith(short+'-') or long.startswith(short+'_'):
                     merge(c1, c2)
+
+        # ── SECONDARY 3: depends_on ───────────────────────────────────────────
+        for cname, block in info.items():
+            for dep in re.findall(r'depends_on[^
+]*
+((?:\s+-\s+\S+
+)+)', block):
+                for d in re.findall(r'-\s+["']?(\w[\w-]+)["']?', dep):
+                    if d in cnames: merge(cname, d)
+            for dep in re.findall(r'depends_on.*?["']?(\w[\w-]+)["']?\s*:\s*
+\s+condition', block):
+                if dep in cnames: merge(cname, dep)
+
+        # ── SECONDARY 4: Env var references ──────────────────────────────────
+        ENV_KEYS = (
+            'DB_HOST','DATABASE_HOST','POSTGRES_HOST','MYSQL_HOST',
+            'MONGO_HOST','REDIS_HOST','REDIS_URL','DATABASE_URL',
+            'MONGO_URL','ELASTICSEARCH_HOST','OPENSEARCH_HOST',
+            'CELERY_BROKER_URL','AMQP_URL','RABBITMQ_HOST',
+        )
+        for cname, block in info.items():
+            for key in ENV_KEYS:
+                for val in re.findall(
+                    rf'{key}=(?:https?://|redis://|amqp://|postgresql://|mysql://)?'
+                    r'(?:[^@\s]*@)?([a-zA-Z][a-zA-Z0-9_-]+)', block
+                ):
+                    val = val.strip('"'')
+                    if val in cnames and val != cname:
+                        merge(cname, val)
+
+        # ── SECONDARY 5: URL references ───────────────────────────────────────
+        for cname, block in info.items():
+            for ref in re.findall(
+                r'(?:https?|redis|postgres|mysql|mongo)://[^@\s]*@?([a-zA-Z][a-zA-Z0-9_-]+):\d+',
+                block
+            ):
+                ref = ref.strip('"'')
+                if ref in cnames and ref != cname:
+                    merge(cname, ref)
 
         return [g for g in groups if len(g) > 1]
     except Exception as e:
