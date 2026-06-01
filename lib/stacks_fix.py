@@ -790,22 +790,84 @@ def classify_container(name):
 
 def inject_depends_on(fpath, cfg):
     """
-    Auto-inject depends_on for related containers in a compose file.
-    Apps depend on their db and cache.
-    Workers depend on the app.
-    Only injects if FIX_AUTO_DEPENDS=1 in config.
-    Skips groups where ALL members are dbs/caches (pure db files).
+    Auto-inject depends_on for related containers using stacks_families algorithm.
+    The main app (family head) gets depends_on listing all other family members.
+    FIX_AUTO_DEPENDS=1  : inject missing depends_on
+    FIX_FORCE_DEPENDS=1 : remove and re-inject all depends_on in families
+    FIX_AUTO_DEPENDS=0  : remove all depends_on from family heads (cleanup mode)
     """
-    if cfg.get("FIX_AUTO_DEPENDS","0") != "1":
-        return []
+    auto = cfg.get("FIX_AUTO_DEPENDS","0") == "1"
     force = cfg.get("FIX_FORCE_DEPENDS","0") == "1"
+    if not auto and not force:
+        return []
     notes = []
     try:
         import sys as _sys
         _sys.path.insert(0, '/usr/local/lib')
-        from stacks_collision import get_related_containers
-        groups = get_related_containers(fpath)
-        if not groups: return []
+        from stacks_families import get_families, get_family_of, is_support
+        # Get all families globally
+        all_families = get_families()
+        if not all_families: return []
+        # Get containers in THIS file
+        data = open(fpath).read()
+        cnames = [c.strip().strip('"').strip("'") for c in re.findall(r'container_name:\s*(\S+)', data)]
+        if not cnames: return []
+        lines = data.splitlines(keepends=True)
+
+        for cname in cnames:
+            head, members = get_family_of(cname)
+            if not head or head != cname: continue  # only process family heads
+            if cname not in cnames: continue  # head must be in this file
+            # Build deps list - all family members in ANY file except head
+            deps = sorted(m for m in members if m != cname)
+            if not deps: continue
+            # Find insertion point
+            idx = data.find(f"container_name: {cname}")
+            if idx < 0: continue
+            line_num = data[:idx].count("\n")
+            # Find image: line to insert after
+            insert_after = line_num
+            for j in range(line_num, min(line_num+15, len(lines))):
+                if re.match(r"    image:\s*", lines[j]):
+                    insert_after = j; break
+            # Check existing depends_on
+            block = "".join(lines[line_num:line_num+60])
+            has_deps = "depends_on:" in block
+            if has_deps and not force: continue
+            # Remove existing if force
+            if has_deps and force:
+                new_lines = []
+                in_dep = False
+                for j, l in enumerate(lines):
+                    if j < line_num: new_lines.append(l); continue
+                    if "depends_on:" in l and j > line_num and j < line_num+60:
+                        in_dep = True; continue
+                    if in_dep:
+                        if re.match(r"      [-{]", l): continue
+                        else: in_dep = False
+                    new_lines.append(l)
+                lines = new_lines
+                data = "".join(lines)
+                line_num = data[:data.find(f"container_name: {cname}")].count("\n")
+                insert_after = line_num
+                for j in range(line_num, min(line_num+15, len(lines))):
+                    if re.match(r"    image:\s*", lines[j]):
+                        insert_after = j; break
+            # Inject depends_on
+            dep_lines = ["    depends_on:\n"] + [f"      - {d}\n" for d in deps]
+            lines = lines[:insert_after+1] + dep_lines + lines[insert_after+1:]
+            data = "".join(lines)
+            notes.append(f"depends_on: {cname} -> {deps}")
+
+        if notes:
+            open(fpath, "w").writelines(lines)
+        return notes
+    except Exception as e:
+        return [f"depends_on error: {e}"]
+
+    # OLD CODE BELOW - replaced by families algorithm
+    if False:
+        groups = []
 
         lines = open(fpath).readlines()
         content = "".join(lines)
