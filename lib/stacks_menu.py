@@ -2243,11 +2243,11 @@ def main(stdscr):
         if k in (ord('q'), ord('Q')): break
         if k == curses.KEY_RIGHT:
             tab = (tab + 1) % len(TABS)
-                curses.flushinp()
+            curses.flushinp()
             sel = 0; scroll = 0
         elif k == curses.KEY_LEFT:
             tab = (tab - 1) % len(TABS)
-                curses.flushinp()
+            curses.flushinp()
             sel = 0; scroll = 0
 
         # Tab-specific keys - only process if not a tab-switch key
