@@ -267,12 +267,8 @@ def hc_from_pattern(image, ports):
 
 # Creator file generator - to be injected into stacks_fix.py
 
-CREATOR_TEMPLATE = '''\
-name: {name}
-#======================================================================
-# Auto-generated network/volume creator file
-# Managed by stacks stacks fixer - do not edit manually
-#======================================================================
+CREATOR_TEMPLATE = '''name: {name}
+
 services:
   {provisioner_name}:
     image: alpine:latest
@@ -282,13 +278,13 @@ services:
     cpuset: "4-5"
     cpu_shares: 256
     networks:
-{service_networks}
+      - "traefik_net"
 
 networks:
-{top_networks}
+  traefik_net:
+    external: true
 
 volumes:
-{top_volumes}
 '''
 
 def generate_creator_file(path, name, networks, volumes, subnet_base="10.50", used_subnets=None):
