@@ -2314,7 +2314,7 @@ def post_build_inject(fpath, svc_name, cfg=None):
     notes = []
     try:
         import os as _os
-        stacks_dir = _os.dirname(fpath)
+        stacks_dir = _os.path.dirname(fpath)
         stack = _os.path.basename(fpath).replace(".yml","")
 
         # Enable just Phase 1 (network/volume define)
