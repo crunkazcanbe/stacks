@@ -514,6 +514,27 @@ def find_ip_with_free_port(port):
     return None, None
 
 if __name__ == "__main__":
+    import sys as _sys
+    # --find-port PORT SVC FILE mode for use by repair command
+    if len(_sys.argv) >= 4 and _sys.argv[1] == "--find-port":
+        _port, _svc, _file = _sys.argv[2], _sys.argv[3], _sys.argv[4]
+        if is_locked_container(_svc):
+            _sys.exit(1)
+        _new_ip, _new_port = find_ip_with_free_port(_port)
+        if not _new_ip:
+            try:
+                _data = open(_file).read()
+                _m = re.search(r"container_name:\s*" + re.escape(_svc) + r".*?image:\s*(\S+)", _data, re.DOTALL)
+                if _m:
+                    for _p in get_image_default_port(_m.group(1).strip()):
+                        _new_ip, _new_port = find_ip_with_free_port(_p)
+                        if _new_ip: break
+            except: pass
+        if _new_ip:
+            print(f"{_new_ip}:{_new_port}")
+            _sys.exit(0)
+        _sys.exit(1)
+    # normal mode below
     import sys
     cfg = load_conf()
     print(f"IP Range:  {cfg['IP_RANGE_START']} → {cfg['IP_RANGE_END']}")

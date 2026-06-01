@@ -829,49 +829,45 @@ self_heal_service() {
   fi
 
   # =======================================
-  # ADVANCED REPAIR: Scan 153-253 keeping Default Port
+  # ADVANCED REPAIR: Use collision lib to find free IP:PORT
+  # Replaces old hardcoded 153-253 loop
   # =======================================
   if [ $success -eq 0 ] && [ -n "$old_port" ] && echo "$error_output" | grep -q -iE "cannot assign requested address|address already in use|port is already allocated"; then
-      update_ui "🔍 Scanning Alias IPs for Port $old_port..." "$CURRENT_PERCENT"
-      
-      for i in {153..253}; do
-          local candidate_ip="192.168.1.$i"
-          # Skip locked IPs
-          if echo "${LOCKED_IPS:-}" | tr ',' '\n' | grep -qx "$candidate_ip"; then continue; fi
-          
-          # Check if this specific IP:PORT is already written in ANY yaml to avoid obvious collisions
-          if grep -qR "$candidate_ip:$old_port" "$STACKS_DIR"/*.yml 2>/dev/null; then
-              continue
-          fi
-          
-          update_ui "🔍 Testing IP $candidate_ip:$old_port..." "$CURRENT_PERCENT"
-          
-          # Patch the YAML to bind to the candidate IP
-          if [ -n "$old_ip" ]; then
-              sed -i "${svc_start},${svc_end} s/$old_ip/$candidate_ip/g" "$file"
-          else
-              sed -i "${svc_start},${svc_end} s/\([\"' ]\)$old_port:/\1$candidate_ip:$old_port:/g" "$file"
-          fi
-          
-          docker compose -f "$file" rm -f -s -v "$svc" >/dev/null 2>&1
-          command docker rm -f "$svc" >/dev/null 2>&1 || true
-          
-          if run_live_cmd "Testing $candidate_ip" "$CURRENT_PERCENT" docker compose -f "$file" up -d $UP_BASE_ARGS --force-recreate "$svc"; then
-              update_ui "✔ Success! Bound to $candidate_ip:$old_port." "$CURRENT_PERCENT"
-              success=1
-              break
-          else
-              # Binding failed. Revert the patch back to original state for the next loop iteration
+      update_ui "🔍 Finding free IP:PORT via collision scanner..." "$CURRENT_PERCENT"
+      _col_result=$(python3 -W ignore /usr/local/lib/stacks_collision.py --find-port "$old_port" "$svc" "$file" 2>/dev/null)
+          update_ui "🔒 $svc is locked - skipping" "$CURRENT_PERCENT"
+      else
+          _col_result=$(python3 -W ignore /usr/local/lib/stacks_collision.py --find-port "$old_port" "$svc" "$file" 2>/dev/null)
+          if [ -n "$_col_result" ]; then
+              local candidate_ip="${_col_result%%:*}"
+              local candidate_port="${_col_result##*:}"
+              update_ui "🔍 Testing $candidate_ip:$candidate_port..." "$CURRENT_PERCENT"
               if [ -n "$old_ip" ]; then
-                  sed -i "${svc_start},${svc_end} s/$candidate_ip/$old_ip/g" "$file"
+                  sed -i "${svc_start},${svc_end} s|$old_ip:$old_port|$candidate_ip:$candidate_port|g" "$file"
+                  sed -i "${svc_start},${svc_end} s|$old_ip|$candidate_ip|g" "$file"
               else
-                  sed -i "${svc_start},${svc_end} s/$candidate_ip:$old_port:/$old_port:/g" "$file"
+                  sed -i "${svc_start},${svc_end} s|\([\"' ]\)$old_port:|\1$candidate_ip:$candidate_port:|g" "$file"
               fi
+              docker compose -f "$file" rm -f -s -v "$svc" >/dev/null 2>&1
+              command docker rm -f "$svc" >/dev/null 2>&1 || true
+              if run_live_cmd "Testing $candidate_ip:$candidate_port" "$CURRENT_PERCENT" docker compose -f "$file" up -d $UP_BASE_ARGS --force-recreate "$svc"; then
+                  update_ui "✔ Bound to $candidate_ip:$candidate_port" "$CURRENT_PERCENT"
+                  success=1
+              else
+                  if [ -n "$old_ip" ]; then
+                      sed -i "${svc_start},${svc_end} s|$candidate_ip:$candidate_port|$old_ip:$old_port|g" "$file"
+                      sed -i "${svc_start},${svc_end} s|$candidate_ip|$old_ip|g" "$file"
+                  else
+                      sed -i "${svc_start},${svc_end} s|$candidate_ip:$candidate_port:|$old_port:|g" "$file"
+                  fi
+                  update_ui "✘ Failed on $candidate_ip:$candidate_port" "$CURRENT_PERCENT"
+              fi
+          else
+              update_ui "✘ No free IP found for port $old_port" "$CURRENT_PERCENT"
           fi
-      done
+      fi
   fi
 
-  # =======================================
   # NUCLEAR OPTION: Reset containerd socket
   # Only runs if all other repairs failed AND container is still stuck
   # =======================================
