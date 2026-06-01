@@ -829,7 +829,6 @@ self_heal_service() {
   fi
 
   # =======================================
-  # =======================================
   # ADVANCED REPAIR: Use collision lib to find free IP:PORT
   # =======================================
   if [ $success -eq 0 ] && [ -n "$old_port" ] && echo "$error_output" | grep -q -iE "cannot assign requested address|address already in use|port is already allocated"; then
