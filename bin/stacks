@@ -1070,6 +1070,16 @@ PYEOF
     fi
   fi
 
+  if [ "$DO_REPAIR" -eq 1 ] && [ -f /usr/local/lib/stacks_repair.py ]; then
+    update_ui "🔧 Repairing $stack (structural)..." "$p2"
+    _rep=$(python3 -c "import sys; sys.path.insert(0,'/usr/local/lib'); import stacks_repair as R; fx=R.repair_file('$STACKS_DIR/$stack.yml'); print(len(fx)); [print('  '+x) for x in fx]" 2>&1)
+    echo "$_rep" | log_output
+    _rn=$(echo "$_rep" | head -1)
+    if [ "${_rn:-0}" != "0" ]; then
+      update_ui "🔧 Repaired $stack: ${_rn} fix(es)" "$p2"; sleep 0.8
+    fi
+  fi
+
   update_ui "Pulling images for Stack $stack..." "$p2"
   run_live_cmd "Pulling $stack" "$p2" docker compose -f "$STACKS_DIR/$stack.yml" pull --ignore-pull-failures
 
@@ -1203,6 +1213,12 @@ PYEOF
     fi
   fi
   
+  # ── Deploy-time snapshot: judge health NOW, before Sablier sleeps anything ──
+  if [ -f /usr/local/lib/stacks_repair.py ]; then
+    _snap=$(python3 -c "import sys; sys.path.insert(0,'/usr/local/lib'); import stacks_repair as R; print(R.snapshot_after_up('$STACKS_DIR/$stack.yml') or '')" 2>/dev/null)
+    [ -n "$_snap" ] && echo "[snapshot saved] $_snap" | log_output
+  fi
+
   update_ui "Restarting Sablier..." "$p4"
   command docker restart sablier 2>&1 | log_output || true
   CURRENT_PERCENT=$p4

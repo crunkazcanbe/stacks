@@ -2787,7 +2787,7 @@ def main():
         total += _norm_fixed
 
     # ── Phase 3.5: depends_on injection ──────────────────────────────────────
-    if on(cfg.get("FIX_AUTO_DEPENDS", "0")):
+    if on(cfg.get("FIX_AUTO_DEPENDS", "0")) or on(cfg.get("FIX_REMOVE_DEPENDS", "0")) or on(cfg.get("FIX_FORCE_DEPENDS", "0")):
         pr(f"\n{C}🔗 Injecting depends_on for related containers{X}")
         _deps_fixed = 0
         _dep_files = sorted(os.path.join(sd, f) for f in os.listdir(sd)
