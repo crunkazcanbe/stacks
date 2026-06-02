@@ -667,6 +667,109 @@ def fix_duplicate_service_keys(content):
     return '\n'.join(new_lines), fixes
 
 
+def _compose_error(path):
+    """Run compose config, return (ok, line_no, message). line_no None if not parseable."""
+    try:
+        r = subprocess.run(["docker","compose","-f",path,"config"],
+                           capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return False, None, str(e)
+    if r.returncode == 0:
+        return True, None, ""
+    err = r.stderr.strip()
+    # filter the harmless unset-variable warnings
+    lines = [l for l in err.splitlines()
+             if 'variable is not set' not in l and 'AK_OUTPOST' not in l]
+    msg = lines[-1] if lines else err
+    # try to extract a line number: "line 206" or "line 168, column 7"
+    lno = None
+    m = re.findall(r'line (\d+)', msg)
+    if m:
+        lno = int(m[-1])  # the deepest/last line number compose reports
+    return False, lno, msg
+
+
+def repair_loop(path, max_passes=25, logf=None):
+    """Error-driven surgical repair. Runs compose config, reads ONE error at a time,
+    fixes just that piece in place, re-validates, repeats until valid or stuck.
+    NEVER reverts the whole file or deletes user additions. Returns list of actions."""
+    actions = []
+    def _log(m):
+        actions.append(m)
+        if logf:
+            try: open(logf,'a').write(m+"\n")
+            except OSError: pass
+
+    last_err = None
+    for _pass in range(max_passes):
+        ok, lno, msg = _compose_error(path)
+        if ok:
+            _log("repair_loop: VALID after %d pass(es)" % _pass)
+            return actions
+        if msg == last_err:
+            # no progress on the same error -> stop to avoid infinite loop
+            _log("repair_loop: STUCK on: %s" % msg)
+            break
+        last_err = msg
+        content = open(path).read()
+        before = content
+        # classify + dispatch to the right in-place fixer
+        fixed_by = None
+        ml = msg.lower()
+        if 'did not find expected' in ml or 'mapping values' in ml or 'block collection' in ml or 'found character' in ml:
+            content, f = fix_network_form(content)          # mixed list/mapping nets
+            if f: fixed_by = 'network_form'
+            if not f:
+                content2, f2 = _fix_indent_at(content, lno)  # generic indent repair
+                if f2: content = content2; fixed_by = 'indent'
+        elif 'already defined' in ml or 'are equal' in ml or 'duplicate' in ml:
+            content, f = fix_duplicate_service_keys(content)
+            if f: fixed_by = 'dup_service'
+            if not f:
+                content, f = fix_network_form(content)       # dedupes net lists too
+                if f: fixed_by = 'dup_network'
+        elif 'depends on undefined service' in ml:
+            content, f = fix_undefined_depends(content)
+            if f: fixed_by = 'undefined_depends'
+        elif 'undefined network' in ml:
+            content, f = fix_undefined_networks(content)
+            if f: fixed_by = 'undefined_network'
+        elif 'cycle' in ml:
+            content, f = fix_dependency_cycles(content)
+            if f: fixed_by = 'dependency_cycle'
+        if fixed_by and content != before:
+            shutil.copy2(path, path + ".prerepair")
+            open(path,'w').write(content)
+            _log("repair_loop pass %d: %s -> fixed (%s)" % (_pass, msg[:80], fixed_by))
+        else:
+            _log("repair_loop pass %d: NO FIXER for: %s" % (_pass, msg[:120]))
+            break
+    return actions
+
+
+def _fix_indent_at(content, lno):
+    """Generic indentation repair near a reported line. Conservative: only
+    re-aligns a service-key line that is off the 4-space grid. Returns (content, fixed)."""
+    if not lno:
+        return content, False
+    lines = content.split('\n')
+    i = lno - 1
+    if i < 0 or i >= len(lines):
+        return content, False
+    # look at the offending line + a few around it for a common indent mistake:
+    # a key indented by an odd number of spaces inside a service block
+    fixed = False
+    for j in range(max(0,i-2), min(len(lines), i+2)):
+        l = lines[j]
+        st = l.lstrip(' ')
+        ind = len(l) - len(st)
+        # service-level keys should be 4 spaces; list items 6; net children 8
+        if st and not st.startswith('-') and st.endswith(':') and ind in (3,5):
+            lines[j] = (' ' * (ind + 1 if ind in (3,5) else ind)) + st
+            fixed = True
+    return ('\n'.join(lines), fixed) if fixed else (content, False)
+
+
 def scan_all(stacks_dir, dry_run=False):
     """Scan all yml files and repair them."""
     total_fixes = 0

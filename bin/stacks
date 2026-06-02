@@ -1072,7 +1072,7 @@ PYEOF
 
   if [ "$DO_REPAIR" -eq 1 ] && [ -f /usr/local/lib/stacks_repair.py ]; then
     update_ui "🔧 Repairing $stack (structural)..." "$p2"
-    _rep=$(python3 -c "import sys; sys.path.insert(0,'/usr/local/lib'); import stacks_repair as R; fx=R.repair_file('$STACKS_DIR/$stack.yml'); print(len(fx)); [print('  '+x) for x in fx]" 2>&1)
+    _rep=$(python3 -c "import sys; sys.path.insert(0,'/usr/local/lib'); import stacks_repair as R; a=R.repair_file('$STACKS_DIR/$stack.yml'); b=R.repair_loop('$STACKS_DIR/$stack.yml'); print(len(a)+len(b)); [print('  '+x) for x in (a+b)]" 2>&1)
     echo "$_rep" | log_output
     _rn=$(echo "$_rep" | head -1)
     if [ "${_rn:-0}" != "0" ]; then
