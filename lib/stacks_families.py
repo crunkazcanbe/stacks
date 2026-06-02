@@ -120,11 +120,55 @@ def build_families(containers):
         result[new_head] = members
     return result
 
+def _load_family_whitelist():
+    """Read ~/.config/stacks/families.conf — lines of form  member=head
+    Returns {member: head}. Used only to gap-fill when auto-detection
+    leaves a container with no real (2+) family."""
+    import os as _os
+    wl = {}
+    cp = _os.path.expanduser("~/.config/stacks/families.conf")
+    try:
+        for line in open(cp):
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            m, h = line.split('=', 1)
+            m = m.strip(); h = h.strip()
+            # tolerate "pangolin_net" or "pangolin" on the right side
+            if h.endswith('_net'):
+                h = h[:-4]
+            if m and h:
+                wl[m] = h
+    except OSError:
+        pass
+    return wl
+
+
 def get_families(stacks_dir=None):
     """Main callable. Returns {head: set(members)}"""
     global STACKS_DIR
     if stacks_dir: STACKS_DIR = stacks_dir
-    return build_families(load_all())
+    fams = build_families(load_all())
+    # Gap-fill from manual whitelist: only attach a member if it is NOT
+    # already in a REAL family (2+ members). Lone/auto-missed = gap.
+    wl = _load_family_whitelist()
+    if wl:
+        # which members are already in a real family?
+        in_real = set()
+        for _h, _mem in fams.items():
+            if len(_mem) >= 2:
+                in_real |= set(_mem)
+        for member, head in wl.items():
+            if member in in_real:
+                continue  # auto already grouped it — don't override
+            # remove member from any lone family it formed
+            for _h in list(fams.keys()):
+                if member in fams[_h] and len(fams[_h]) == 1:
+                    del fams[_h]
+            fams.setdefault(head, set())
+            fams[head].add(head)
+            fams[head].add(member)
+    return fams
 
 def get_family_of(cname, stacks_dir=None):
     for head, members in get_families(stacks_dir).items():

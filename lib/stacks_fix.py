@@ -82,6 +82,8 @@ def load_conf():
         "FIX_LOCAL_VOLUMES": "0",      # 1 = generate non-external local volumes instead
         "FIX_INLINE_NETWORKS": "0",    # 1 = add networks directly in service file (not creator)
         "FIX_INLINE_VOLUMES": "0",     # 1 = add volumes directly in service file (not creator)
+        "FIX_DEPENDS": "off",          # MASTER: on = inject depends_on (+includes for cross-stack); off = strip all depends_on
+        "FIX_DEPENDS_INCLUDES": "1",   # when injecting, auto-add include: for cross-stack family members
         "FIX_AUTO_DEPENDS": "0",       # 1 = auto-inject depends_on for related containers (app->db->redis)
         "FIX_FORCE_DEPENDS": "0",      # 1 = re-inject depends_on even if already exists
         "FIX_STRIP_PROFILES": "0",  # set to 0 to disable auto-stripping of profiles: blocks
@@ -101,6 +103,12 @@ def load_conf():
                 cfg[k] = v  # accept all keys, not just pre-defined ones
         except Exception as e:
             pr(f"{Y}⚠ Could not fully read config ({e}); using defaults.{X}")
+    # FIX_DEPENDS master switch maps to internal flags
+    _fd = str(cfg.get("FIX_DEPENDS", "off")).strip().lower()
+    if _fd in ("on", "1", "true", "yes"):
+        cfg["FIX_AUTO_DEPENDS"] = "1"; cfg["FIX_REMOVE_DEPENDS"] = "0"
+    elif _fd in ("off", "0", "false", "no"):
+        cfg["FIX_AUTO_DEPENDS"] = "0"; cfg["FIX_REMOVE_DEPENDS"] = "1"
     return cfg
 
 def on(v): return str(v).strip() not in ("0", "", "false", "False", "no")
@@ -1060,6 +1068,69 @@ def inject_depends_on(fpath, cfg):
             lines = lines[:insert_after+1] + dep_lines + lines[insert_after+1:]
             data = "".join(lines)
             notes.append(f"depends_on: {cname} -> {deps}")
+
+        # ── Include injection: for any dep member NOT in this file, add include
+        #    for the stack file that defines it. Guards: dedup, no-self, no-cycle.
+        if on(cfg.get("FIX_DEPENDS_INCLUDES", "1")):
+            data = "".join(lines)
+            this_file = os.path.basename(fpath)
+            local_cn = set(re.findall(r'container_name:\s*(\S+)', data))
+            local_cn = {c.strip().strip(chr(34)).strip(chr(39)) for c in local_cn}
+            sd2 = os.path.dirname(fpath)
+            needed_files = set()
+            for cname in cnames:
+                head, members = get_family_of(cname)
+                if not head or head != cname:
+                    continue
+                for m in members:
+                    if m == cname or m in local_cn:
+                        continue
+                    # find which file defines this cross-stack member
+                    for fn in sorted(os.listdir(sd2)):
+                        if not fn.endswith((".yml", ".yaml")) or fn == this_file:
+                            continue
+                        try:
+                            fdata = open(os.path.join(sd2, fn)).read()
+                        except OSError:
+                            continue
+                        if re.search(r'container_name:\s*[\"\x27]?' + re.escape(m) + r'[\"\x27]?\s', fdata):
+                            needed_files.add(fn)
+                            break
+            # no-cycle guard: skip a file that already includes THIS file
+            safe_inc = []
+            for fn in sorted(needed_files):
+                try:
+                    tdata = open(os.path.join(sd2, fn)).read()
+                except OSError:
+                    continue
+                if re.search(r'include:.*' + re.escape(this_file), tdata, re.S):
+                    notes.append(f"include SKIPPED (would cycle): {fn}")
+                    continue
+                safe_inc.append(fn)
+            # dedup against existing includes already in this file
+            existing_inc = set(re.findall(r'-\s*\S*/([^/\n]+\.ya?ml)', data))
+            existing_inc |= set(re.findall(r'include:\s*\n(?:\s*-\s*\S+\n)*', data))
+            to_add = [fn for fn in safe_inc if fn not in data]
+            if to_add:
+                lines2 = "".join(lines).splitlines(keepends=True)
+                # insert include block after the name: line (or at top)
+                ins = 0
+                for _i, _l in enumerate(lines2):
+                    if re.match(r'name:\s*', _l):
+                        ins = _i + 1; break
+                if "include:" in data:
+                    # append to existing include block
+                    for _i, _l in enumerate(lines2):
+                        if re.match(r'include:\s*$', _l):
+                            blk = [f"  - {sd2}/{fn}\n" for fn in to_add]
+                            lines2 = lines2[:_i+1] + blk + lines2[_i+1:]
+                            break
+                else:
+                    blk = ["include:\n"] + [f"  - {sd2}/{fn}\n" for fn in to_add]
+                    lines2 = lines2[:ins] + blk + lines2[ins:]
+                lines = lines2
+                for fn in to_add:
+                    notes.append(f"include added: {fn}")
 
         if notes:
             open(fpath, "w").writelines(lines)
@@ -2788,7 +2859,10 @@ def main():
 
     # ── Phase 3.5: depends_on injection ──────────────────────────────────────
     if on(cfg.get("FIX_AUTO_DEPENDS", "0")) or on(cfg.get("FIX_REMOVE_DEPENDS", "0")) or on(cfg.get("FIX_FORCE_DEPENDS", "0")):
-        pr(f"\n{C}🔗 Injecting depends_on for related containers{X}")
+        if on(cfg.get("FIX_REMOVE_DEPENDS", "0")) and not on(cfg.get("FIX_AUTO_DEPENDS", "0")):
+            pr(f"\n{C}🔗 Removing depends_on (retire mode){X}")
+        else:
+            pr(f"\n{C}🔗 Injecting depends_on for related containers{X}")
         _deps_fixed = 0
         _dep_files = sorted(os.path.join(sd, f) for f in os.listdir(sd)
                      if f.endswith(".yml") or f.endswith(".yaml")) \
