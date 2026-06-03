@@ -71,7 +71,8 @@ def load_conf():
         "FIX_AUTO_LINK_NETWORKS": "0",
         "FIX_AUTHORITATIVE_NETWORKS": "1",  # 1=wipe+set exact nets (removes junk); 0=additive
         "FIX_AUTO_NAME_CONTAINERS": "0",  # 1=rename containers (loner=oneword, family=root_role) + update all refs. DEFAULT OFF for others
-        "FIX_SYNC_DYNAMICS_NAMES": "0",  # 1=also apply rename to Traefik dynamic configs (keeps routing in sync). DEFAULT OFF                   # auto-gen stackname_net for stacks with 2+ services
+        "FIX_SYNC_DYNAMICS_NAMES": "0",  # 1=also apply rename to Traefik dynamic configs (keeps routing in sync). DEFAULT OFF
+        "FIX_SYNC_ALL_NAMES": "0",  # 1=rename ALL refs (flags, depends_on, service-keys, hostname, env URLs) to match container. scan-based. DEFAULT OFF                   # auto-gen stackname_net for stacks with 2+ services
         "FIX_REMOVE_GAPS": "0",  # set to 0 to disable blank line removal in service blocks
         "FIX_HC_IGNORE_STACKS": "",  # space-separated stack files to skip healthcheck changes
         "FIX_REPLACE_BROKEN_HC": "0",  # set to 1 to replace actively-failing healthchecks
@@ -1692,11 +1693,29 @@ def apply_renames(stacks_dir, rmap, dry_run=True):
         txt = open(f).read()
         orig = txt
         n = 0
-        for old, new in pairs:
-            # whole-word: not preceded/followed by name-char (handles quotes, :, /, space)
-            pat = r'(?<![A-Za-z0-9_.-])' + re.escape(old) + r'(?![A-Za-z0-9_.-])'
-            txt, c = re.subn(pat, new, txt)
-            n += c
+        _out = []
+        for _line in txt.split('\n'):
+            _l = _line
+            _st = _l.strip()
+            # SKIP volume mounts (- name:/path) and top-level vol/net declarations
+            _is_volmount = bool(re.match(r'^\s*-\s+[A-Za-z0-9._-]+:/', _st))
+            _is_decl = bool(re.match(r'^  [A-Za-z0-9._-]+:\s*\{', _l)) and ('_data' in _l or '_net' in _l or 'external' in _l)
+            if _is_volmount or _is_decl:
+                _out.append(_l); continue
+            for old, new in pairs:
+                # only rename in genuine container-reference contexts
+                if (re.match(r'^\s*container_name:\s*', _l) or
+                    re.match(r'^\s*hostname:\s*', _l) or
+                    re.match(r'^  '+re.escape(old)+r':\s*$', _l) or
+                    _st.startswith('- '+old) or _st.startswith('- "'+old+'"') or _st.startswith("- '"+old+"'") or
+                    'sablier' in _l or 'names:' in _l or 'names=' in _l or
+                    'depends_on' in _l or
+                    '@'+old in _l or '//'+old in _l or "('"+old+"'" in _l or '://'+old in _l):
+                    _pat = r'(?<![A-Za-z0-9_.-])'+re.escape(old)+r'(?![A-Za-z0-9_.-])'
+                    _l, _c = re.subn(_pat, new, _l)
+                    n += _c
+            _out.append(_l)
+        txt = '\n'.join(_out)
         if n and txt != orig:
             report[_os.path.basename(f)] = n
             if not dry_run:
@@ -1732,12 +1751,21 @@ def build_rename_map(stacks_dir):
         head, members = _lookup.get(cn, (None, None))
         if head and members and len(members) >= 2:
             root = head.replace('.', '-').replace('_', '-').split('-')[0]
-            if cn == root:
+            GUI = {'dashboard','gui','web','frontend','ui','console','studio','portal','panel','admin'}
+            # strip trailing _one/_two/_three/_N suffixes, normalize separators
+            _clean = re.sub(r'[_-](one|two|three|four|1|2|3|4)$', '', cn)
+            parts = _clean.replace('.', '-').replace('_', '-').split('-')
+            role = [x for x in parts if x != root]
+            # is there a service literally named the root already? (then GUI can't take it)
+            _root_taken = any(
+                (m == root or m.replace('.','-').replace('_','-') == root)
+                for m in members)
+            if cn == root or not role:
                 nw = root
+            elif any(r in GUI for r in role) and not _root_taken:
+                nw = root  # GUI member becomes bare root ONLY if root not already taken
             else:
-                parts = cn.replace('.', '-').replace('_', '-').split('-')
-                role = [x for x in parts if x != root]
-                nw = (root + '_' + '_'.join(role)) if role else cn
+                nw = root + '_' + '_'.join(role)
         else:
             nw = cn.replace('-', '').replace('.', '')
         if nw != cn:
