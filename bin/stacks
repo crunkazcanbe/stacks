@@ -3250,6 +3250,11 @@ elif [ "$COMMAND" == "fix" ]; then
   # ── IP/Port collision fix ─────────────────────────────────────────────────
   echo -e "\e[1;36m🔍 Scanning IP/port collisions...\e[0m"
   python3 -W ignore /usr/local/lib/stacks_collision.py 2>/dev/null
+  # read auto-move toggle from config (default OFF = warn/scan only, no shuffle)
+  _autofix=$(python3 -c "import sys; sys.path.insert(0,'/usr/local/lib'); from stacks_collision import load_conf; print(load_conf().get('IP_COLLISION_AUTOFIX','0'))" 2>/dev/null)
+  if [ "$_autofix" != "1" ]; then
+    echo -e "\e[1;33m⏭  IP/port auto-move disabled (scan-only). Set ip_collision_autofix: true to enable.\e[0m"
+  else
   echo -e "\e[1;36m🔧 Fixing IP/port collisions...\e[0m"
   python3 -W ignore << 'COLFIX'
 import sys, re, glob
@@ -3326,29 +3331,46 @@ for col in dupes:
 
 print(f"  Done: {fixed} fixed, {skipped} skipped")
 COLFIX
+  fi
   echo -e "\e[1;35m─────────────────────────────────────────\e[0m"
+  # ── run fix through the STACKS loading bar ──
+  _fixlog="/tmp/stacks-fix-$$.log"; : > "$_fixlog"
+  CURRENT_STACK="fix"; CURRENT_SERVICE=""
+  init_ui 2>/dev/null || true
+  update_ui "Starting stack fixer..." 2
+  _run_fix_bar() {
+    # $@ = args to stacks_fix.py ; pipes output through the bar
+    python3 /usr/local/lib/stacks_fix.py "$@" 2>&1 | tr '\r' '\n' | while IFS= read -r _ln; do
+      echo "$_ln" >> "$_fixlog"
+      _clean=$(echo "$_ln" | sed -E 's/\x1b\[[0-9;]*[a-zA-ZK]//g' | sed 's/^[ \t]*//')
+      [ -z "$_clean" ] && continue
+      CURRENT_PERCENT=$(( CURRENT_PERCENT < 95 ? CURRENT_PERCENT + 1 : 95 ))
+      update_ui "${_clean:0:60}" "$CURRENT_PERCENT"
+    done
+  }
   if [ ${#PARSED_STACKS[@]} -gt 0 ]; then
-    # Multiple stacks specified
     for _fidx in "${!PARSED_STACKS[@]}"; do
       _fix_stack="${PARSED_STACKS[$_fidx]}"
       _fix_svc="${PARSED_SERVICES[$_fidx]:-}"
-      if [ -n "$_fix_svc" ]; then
-        python3 /usr/local/lib/stacks_fix.py "$_fix_stack" "$_fix_svc"
-      else
-        python3 /usr/local/lib/stacks_fix.py "$_fix_stack"
-      fi
+      CURRENT_STACK="$_fix_stack"
+      if [ -n "$_fix_svc" ]; then _run_fix_bar "$_fix_stack" "$_fix_svc"; else _run_fix_bar "$_fix_stack"; fi
     done
   elif [ -n "$TARGET_STACK" ]; then
-    # Single stack
-    if [ -n "$TARGET_SERVICE" ]; then
-      python3 /usr/local/lib/stacks_fix.py "$TARGET_STACK" "$TARGET_SERVICE"
-    else
-      python3 /usr/local/lib/stacks_fix.py "$TARGET_STACK"
-    fi
+    CURRENT_STACK="$TARGET_STACK"
+    if [ -n "$TARGET_SERVICE" ]; then _run_fix_bar "$TARGET_STACK" "$TARGET_SERVICE"; else _run_fix_bar "$TARGET_STACK"; fi
   else
-    # No target — fix all
-    python3 /usr/local/lib/stacks_fix.py all
+    CURRENT_STACK="all"; _run_fix_bar all
   fi
+  update_ui "Fix complete" 100
+  sleep 0.5
+  clear_ui 2>/dev/null || true
+  printf "\e[?25h"
+  echo -e "\e[1;32m✨ Fix complete\e[0m"
+  if [ "$DO_INFO" -eq 1 ]; then
+    echo -e "\n\e[1;36m── Last 20 fix log lines ──\e[0m"
+    tail -n 20 "$_fixlog"
+  fi
+  rm -f "$_fixlog" 2>/dev/null || true
   exit 0
 
 fi

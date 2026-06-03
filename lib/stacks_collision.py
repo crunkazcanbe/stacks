@@ -170,6 +170,7 @@ def load_conf():
         "LOCKED_IPS":                "",
         "IP_PORT_LOCKED_CONTAINERS": "cloudflared,cloudflared_tunnel_core,cloudflared-doh,traefik,sablier",
         "NETWORK_MODE_SKIP":         "1",
+        "IP_COLLISION_AUTOFIX":      "0",
     }
     try:
         for line in open(CONF_FILE):
