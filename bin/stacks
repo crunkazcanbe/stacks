@@ -1110,23 +1110,27 @@ PYEOF
 
   # Auto-define & create missing networks/volumes before deploy (uses stacks_fix.py)
   if [ "$DO_FIX" -eq 1 ] && [ -f /usr/local/lib/stacks_fix.py ]; then
-    update_ui "🔍 Checking networks/volumes for $stack..." "$p2"
-    _fix_out=$(python3 -u /usr/local/lib/stacks_fix.py "$stack" 2>&1)
+    update_ui "🔧 Fixing $stack..." "$p2"
+    # Stream each fix line to the action bar LIVE (so you see what it's doing),
+    # while capturing the full output for the log + the grep checks below.
+    # -u keeps python unbuffered; without streaming the bar froze until it finished.
+    _ftmp=$(mktemp 2>/dev/null || echo "/tmp/stacks-fixtmp-$$-${stack}.log"); : > "$_ftmp"
+    python3 -u /usr/local/lib/stacks_fix.py "$stack" 2>&1 | tr '\r' '\n' | while IFS= read -r _ln; do
+      echo "$_ln" >> "$_ftmp"
+      _fc=$(echo "$_ln" | sed -E 's/\x1b\[[0-9;]*[a-zA-ZK]//g' | sed 's/^[ \t]*//')
+      [ -z "$_fc" ] && continue
+      case "$_fc" in *____*|*"STACKS STACK"*|*"╔"*|*"╚"*|*"║"*|*"═"*) continue ;; esac
+      update_ui "🔧 $stack › ${_fc:0:46}" "$p2"
+    done
+    _fix_out=$(cat "$_ftmp" 2>/dev/null); rm -f "$_ftmp"
     echo "$_fix_out" | log_output
     { echo "── $stack ──"; echo "$_fix_out"; } >> "$FIXSTEP_LOG"
+    _fchg=$(echo "$_fix_out" | grep -oE "Done — [0-9]+ change" | grep -oE "[0-9]+" | head -1)
+    update_ui "🔧 $stack › fix done (${_fchg:-0} change(s))" "$p2"
     if echo "$_fix_out" | grep -qE "added net|added vol|healed"; then
       _added=$(echo "$_fix_out" | grep -oE "added.*" | head -1)
       update_ui "🔗 Defined missing infra: ${_added:0:40}" "$p2"
       sleep 0.8
-    fi
-    # Reconcile this stack's dynamic file ONLY when 'dynamics' keyword was given
-    if [ "$DO_DYNAMICS" -eq 1 ] && [ "${FIX_DYNAMICS:-1}" != "0" ]; then
-      update_ui "⚡ Reconciling dynamic for $stack..." "$p2"
-      _dynout=$(run_dynamics_fix fix "$stack" 2>&1)
-      echo "$_dynout" | log_output
-      { echo "── $stack ──"; echo "$_dynout"; } >> "$DYNSTEP_LOG"
-      _dnc=$(echo "$_dynout" | grep -oE "Total name fixes: [0-9]+" | grep -oE "[0-9]+" | head -1)
-      if [ "${_dnc:-0}" != "0" ]; then update_ui "⚡ Dynamic $stack: ${_dnc} name fix(es)" "$p2"; sleep 0.8; fi
     fi
   fi
 
@@ -1139,20 +1143,6 @@ PYEOF
     if [ "${_rn:-0}" != "0" ]; then
       update_ui "🔧 Repaired $stack: ${_rn} fix(es)" "$p2"; sleep 0.8
     fi
-    # Structural repair of this stack's dynamic file ONLY when 'dynamics' keyword given
-    if [ "$DO_DYNAMICS" -eq 1 ] && [ "${FIX_DYNAMICS:-1}" != "0" ]; then
-      _dynrep=$(run_dynamics_fix repair "$stack" 2>&1)
-      echo "$_dynrep" | log_output
-      { echo "── $stack (dynamic) ──"; echo "$_dynrep"; } >> "$REPAIRSTEP_LOG"
-    fi
-  fi
-
-  # 'dynamics' keyword given without 'fix' — still reconcile names for this stack
-  if [ "$DO_FIX" -ne 1 ] && [ "$DO_DYNAMICS" -eq 1 ]; then
-    update_ui "⚡ Reconciling dynamic for $stack..." "$p2"
-    _dynout=$(run_dynamics_fix fix "$stack" 2>&1)
-    echo "$_dynout" | log_output
-    { echo "── $stack ──"; echo "$_dynout"; } >> "$DYNSTEP_LOG"
   fi
 
   update_ui "Pulling images for Stack $stack..." "$p2"
@@ -1646,6 +1636,21 @@ init_ui
 if [ "$COMMAND" == "up" ]; then
   # Fresh per-step logs for this run (surfaced by `info` at the end)
   : > "$FIXSTEP_LOG"; : > "$REPAIRSTEP_LOG"; : > "$DYNSTEP_LOG"
+
+  # ── 'dynamics' keyword: operate on ALL dynamics ONCE, up front ────────────
+  # Names are always reconciled (fix); structural repair also runs when 'repair'
+  # is given. This only touches the dynamic Traefik configs — the stacks
+  # themselves get their full fix/repair/recreate treatment in the deploy loop.
+  if [ "$DO_DYNAMICS" -eq 1 ] && [ "${FIX_DYNAMICS:-1}" != "0" ]; then
+    if [ "$DO_REPAIR" -eq 1 ]; then
+      update_ui "⚡ Repairing all dynamics (structural)..." 2
+      { echo "── all dynamics (structural) ──"; run_dynamics_fix repair all 2>&1; } >> "$REPAIRSTEP_LOG"
+    fi
+    update_ui "⚡ Reconciling all dynamic names..." 3
+    run_dynamics_fix fix all > "$DYNSTEP_LOG" 2>&1
+    _dsum=$(grep -oE "Total name fixes: [0-9]+ across [0-9]+ file\(s\); [0-9]+ orphan ref\(s\)" "$DYNSTEP_LOG" | tail -1)
+    update_ui "⚡ Dynamics: ${_dsum:-reconciled}" 4
+  fi
   if [ -z "$TARGET_STACK" ] && [ ${#CUSTOM_STACKS[@]} -eq 0 ]; then
     total_stacks=${#STACKS[@]}
     pct_per_stack=0
