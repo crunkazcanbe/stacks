@@ -60,6 +60,7 @@ def load_conf():
         "FIX_HEAL_TYPOS": "0",
         "FIX_DEEP_INSPECT": "1",
         "FIX_SUBNET_BASE": "10.50",
+        "FIX_FORCE_NEW_CREATOR": "0",  # 1=always make a fresh creator stack instead of adding to smallest existing
         "FIX_BACKUP": "1",
         "FIX_VOLUME_BASE": "/srv/stacks/docker",  # base path for bind mounts
         "FIX_VOLUME_CONTAINER_PATH": "/config",          # default container-side path
@@ -387,10 +388,16 @@ def find_or_create_creator(stacks_dir, cfg):
         if os.path.exists(_tp):
             return _tp
     
+    # FORCE: skip finding existing, go straight to creating a new creator
+    if cfg.get('FIX_FORCE_NEW_CREATOR', '0') == '1':
+        best = None
+    else:
+        best = '__FINDIT__'
     # First try to find existing creator with provisioner
-    best = None
-    best_size = float('inf')
-    for f in sorted(glob.glob(f"{stacks_dir}/*.yml")):
+    if best == '__FINDIT__':
+        best = None
+        best_size = float('inf')
+    for f in (sorted(glob.glob(f"{stacks_dir}/*.yml")) if cfg.get('FIX_FORCE_NEW_CREATOR','0')!='1' else []):
         try:
             content = open(f).read()
             import re
