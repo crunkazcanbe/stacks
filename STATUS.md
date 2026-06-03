@@ -146,3 +146,26 @@ Config flags exist: FIX_AUTO_NAME_CONTAINERS=1, FIX_SYNC_DYNAMICS_NAMES=1, FIX_R
 ## CONFIGURABLE PATHS (already exist, verify universal)
 STACKS_DIR + STACKS_DIR_OVERRIDE, DYNAMICS_DIR + DYNAMICS_DIR_OVERRIDE in conf.
 Some hardcoded paths remain (stacks lines ~1436,1474,2362) - should use $DYNAMICS_DIR var.
+
+## PROVISIONER-GENERATOR + TWO-WAY VOLUME MANAGER (build next, config-gated)
+Networks/volumes mode controlled by EXTERNAL vs INTERNAL toggle:
+  EXTERNAL on  -> fix auto-creates a provisioner container in a DEDICATED stack,
+                  adds all networks + named volumes to it (provisioner creates them),
+                  everything else references them as external.
+  INTERNAL on  -> fix adds all networks/volumes DIRECTLY into the current stack,
+                  full inline settings: subnet, gateway, driver: bridge, attachable,
+                  enable_ipv6: false, labels [com.stacks.network=X, env=production], ipam config.
+Two-way VOLUME manager:
+  BIND mode  -> all volumes = bind mounts at FIX_VOLUME_BASE/<name> (DONE; FIX_FORCE_VOLUME_BASE keeps them there).
+  NAMED mode -> fix converts binds -> named volumes, declares them external, adds to provisioner that creates them.
+  Switching back to BIND -> fix converts named -> bind, fills all out under FIX_VOLUME_BASE.
+  When external+named: find smallest (kb-wise) and put it in [Josie's note - clarify on build].
+Existing pieces: convert_named_to_bind (DONE), FIX_FORCE_VOLUME_BASE (flag registered, behavior TODO),
+  FIX_VOLUME_BASE=/srv/stacks/docker. Need: convert_bind_to_named, provisioner-injector, internal-inline-injector.
+Network subnet pattern observed: 10.50.X.0/24 gateway 10.50.X.1, incrementing X.
+
+## TONIGHT'S DEPLOY STATE (2026-06-02 late)
+Live rename applied to ALL 30 stacks + 29 dynamics. All 30 validate. Deployed via 'stacks up ... repair recreate info'.
+~30 running, rest Sablier-asleep (normal). proxmox fully removed. depends stripped. volumes normalized to stacks (377 paths).
+4 dead images rehosted to ghcr.io/crunkazcanbe (openclaw-operator, zot, agent-of-empires, dweebui) + stack refs swapped.
+Remaining: a few more dead images to rehost (use /home/user/rehost-image.sh if created, or build manually).
