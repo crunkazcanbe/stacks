@@ -561,20 +561,15 @@ def stable_assign(cname, port):
     blacklist_ips = set(x.strip() for x in cfg["IP_BLACKLIST"].split(",") if x.strip())
     locked        = set(x.strip() for x in cfg["LOCKED_IPS"].split(",") if x.strip())
     whitelist     = [x.strip() for x in cfg["IP_WHITELIST"].split(",") if x.strip()]
+    blacklist_ports = set(x.strip() for x in cfg["PORT_BLACKLIST"].split(",") if x.strip())
 
-    def _free(ip):
+    def _free(ip, prt):
         if not ip or ip in blacklist_ips or ip in locked: return False
-        # another container already holding ip:port blocks it (our own slot is OK)
-        if any(c != cname for (_s, c) in port_map.get(f"{ip}:{port}", [])): return False
-        if ip in host_ports and port in host_ports[ip]: return False
+        # another container already holding ip:prt blocks it (our own slot is OK)
+        if any(c != cname for (_s, c) in port_map.get(f"{ip}:{prt}", [])): return False
+        if ip in host_ports and prt in host_ports[ip]: return False
         return True
 
-    # 1) reuse remembered assignment — stops rotation across runs
-    rec = led.get(cname, "")
-    if rec.endswith(":" + port) and _free(rec.split(":", 1)[0]):
-        return rec.split(":", 1)[0], port
-
-    # 2) first-fit: lowest IP in range where this exact port is free
     if whitelist:
         ips = whitelist
     else:
@@ -585,11 +580,34 @@ def stable_assign(cname, port):
             ips = [f"{prefix}.{i}" for i in range(start, end + 1)]
         except Exception:
             ips = []
+
+    # 1) reuse remembered assignment — stops rotation across runs
+    rec = led.get(cname, "")
+    if rec.endswith(":" + port) and _free(rec.split(":", 1)[0], port):
+        return rec.split(":", 1)[0], port
+
+    # 2) first-fit on the DEFAULT port: lowest IP where this port is free
     for ip in ips:
-        if _free(ip):
+        if _free(ip, port):
             led[cname] = f"{ip}:{port}"
             save_ledger(led)
             return ip, port
+
+    # 3) LAST RESORT — default port is taken on every IP. Only now change the port:
+    #    lowest IP, lowest free non-blacklisted port in the configured range.
+    try:
+        p_start = int(cfg["PORT_RANGE_START"]); p_end = int(cfg["PORT_RANGE_END"])
+    except Exception:
+        p_start, p_end = 8080, 8999
+    for ip in ips:
+        if ip in blacklist_ips or ip in locked: continue
+        for np in range(p_start, p_end + 1):
+            nps = str(np)
+            if nps in blacklist_ports: continue
+            if _free(ip, nps):
+                led[cname] = f"{ip}:{nps}"
+                save_ledger(led)
+                return ip, nps
     return None, None
 
 

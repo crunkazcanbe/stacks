@@ -1937,7 +1937,10 @@ try:
             if old_pat in content:
                 content = content.replace(old_pat, new_pat, 1)
                 open(fpath, 'w').write(content)
-                print(f'FIXED: {cname} {old_pat} -> {new_pat}')
+                if str(new_port) != str(port):
+                    print(f'LAST RESORT: {cname} default port {port} was full on all IPs -> moved to {new_ip}:{new_port}')
+                else:
+                    print(f'FIXED: {cname} {old_pat} -> {new_pat} (port kept)')
                 fixed += 1
     if fixed:
         print(f'Collision fix: {fixed} IP:PORT assignments updated in $stack')
@@ -3427,7 +3430,10 @@ for col in dupes:
         if old_pat in content:
             content = content.replace(old_pat, new_pat, 1)
             open(fpath, "w").write(content)
-            print(f"  FIXED: {cname:<30} {old_pat} -> {new_pat}")
+            if str(new_port) != str(port):
+                print(f"  LAST RESORT: {cname:<26} default port {port} full on all IPs -> {new_ip}:{new_port}")
+            else:
+                print(f"  FIXED: {cname:<30} {old_pat} -> {new_pat} (port kept)")
             fixed += 1
         else:
             skipped += 1
