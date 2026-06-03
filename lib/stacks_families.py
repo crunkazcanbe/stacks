@@ -28,9 +28,17 @@ def root(name):
     """Get first meaningful segment: authentik-server -> authentik, wazuh.manager -> wazuh"""
     return name.replace('_','-').replace('.','-').split('-')[0]
 
+# Generic prefixes that must NOT trigger family grouping. These are words
+# shared by unrelated apps (open-webui vs open-notebook), or infra names.
+NON_FAMILY_ROOTS = {'open', 'agent', 'cloudflared', 'minecraft', 'pritunl',
+                    'tailscale', 'provisioner'}
+
 def related(a, b):
     """True if a and b are likely in the same family."""
     ra, rb = root(a), root(b)
+    # never group on a generic/non-family root
+    if ra in NON_FAMILY_ROOTS or rb in NON_FAMILY_ROOTS:
+        return False
     if ra == rb and len(ra) >= 3: return True
     s, lg = (a,b) if len(a)<=len(b) else (b,a)
     return lg.startswith(s+'-') or lg.startswith(s+'_')

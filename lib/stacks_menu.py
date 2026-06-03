@@ -27,6 +27,9 @@ C_YELLOW    = 10
 C_CYAN      = 11
 C_RUNNING   = 12
 C_STOPPED   = 13
+C_TRANS_BLUE = 14
+C_TRANS_PINK = 15
+C_TRANS_WHITE = 16
 
 def init_colors():
     curses.start_color()
@@ -44,6 +47,51 @@ def init_colors():
     curses.init_pair(C_CYAN,      81,  -1)
     curses.init_pair(C_RUNNING,   82,  -1)
     curses.init_pair(C_STOPPED,  240,  -1)
+    curses.init_pair(C_TRANS_BLUE,  117, -1)
+    curses.init_pair(C_TRANS_PINK,  218, -1)
+    curses.init_pair(C_TRANS_WHITE, 231, -1)
+
+
+WHALE_ART = [
+    "                  ##        .",
+    "            ## ## ##       ==",
+    "         ## ## ## ## ##   ===",
+    "     /=====================\\___/ ===",
+    " ~~ {~~  ~~~~  ~~~  ~~~~  ~~ ~ /   ===-  ~~~",
+    "     \\______ o            __/",
+    "      \\      \\         __/",
+    "       \\      \\______ __/",
+    "        \\_______________/",
+]
+
+def draw_whale_frame(stdscr, frame):
+    """Draw centered trans-pride Docker whale with a flowing color wave."""
+    pairs = [C_TRANS_BLUE, C_TRANS_PINK, C_TRANS_WHITE, C_TRANS_PINK, C_TRANS_BLUE]
+    try:
+        h, w = stdscr.getmaxyx()
+    except:
+        return
+    art_w = max(len(l) for l in WHALE_ART)
+    art_h = len(WHALE_ART)
+    top = max(0, (h - art_h - 2) // 2)
+    left = max(0, (w - art_w) // 2)
+    for row, line in enumerate(WHALE_ART):
+        for col, ch in enumerate(line):
+            if ch == ' ':
+                continue
+            band = int(((col / max(1, art_w)) * len(pairs)) - frame * 0.5) % len(pairs)
+            try:
+                stdscr.addstr(top + row, left + col, ch,
+                              curses.color_pair(pairs[band]) | curses.A_BOLD)
+            except:
+                pass
+    label = "stacks"
+    try:
+        stdscr.addstr(top + art_h + 1, max(0, (w - len(label)) // 2),
+                      label, curses.color_pair(C_TRANS_PINK) | curses.A_BOLD)
+    except:
+        pass
+
 
 # ── Data layer ───────────────────────────────────────────────────────────────
 data_lock = threading.Lock()
@@ -99,7 +147,7 @@ def get_containers():
     try:
         r = subprocess.run(
             ['docker','ps','-a','--format',
-             '{"name":"{{.Names}}","status":"{{.Status}}","image":"{{.Image}}","state":"{{.State}}"}'],
+             '{"name":"{{.Names}}","status":"{{.Status}}","image":"{{.Image}}","state":"{{.State}}","stack":"{{.Label \"com.docker.compose.project\"}}"}'],
             capture_output=True, text=True, timeout=10)
         if r.returncode == 0:
             for line in r.stdout.strip().split('\n'):
@@ -1813,7 +1861,7 @@ def do_container_action(stdscr, container_name, stack_file, action):
 TABS = ['Containers', 'Stacks', 'Logs', 'Dynamics', 'Art', 'Backup', 'Build', 'Configs', 'Network', 'Updates']
 
 def draw_containers_tab(win, h, w, containers, sel, scroll):
-    win.addstr(3, 2, f'{"NAME":<26} {"STATUS":<12} {"MEMORY":<19} {"SIZE":<9} {"IMAGE"}',
+    win.addstr(3, 2, f'{"NAME":<26} {"STACK":<12} {"STATUS":<12} {"MEMORY":<19} {"SIZE":<9} {"IMAGE"}',
                curses.color_pair(C_ACCENT))
     win.addstr(4, 2, '─' * (w-4), curses.color_pair(C_DIM))
 
@@ -1828,6 +1876,7 @@ def draw_containers_tab(win, h, w, containers, sel, scroll):
         state  = c.get('state','')
         status = c.get('status','')[:11]
         image  = c.get('image','')[:29]
+        stack  = c.get('stack','')[:11]
 
 
         is_running = state.lower() == 'running'
@@ -1837,17 +1886,18 @@ def draw_containers_tab(win, h, w, containers, sel, scroll):
         mem = app_data['mem_stats'].get(c.get('name',''), '')[:18]
         img_sz = app_data['img_sizes'].get(image, app_data['img_sizes'].get(image.split(':')[0]+':latest',''))[:8]
         if idx == sel:
-            line = f'{indicator} {name:<26} {status:<12} {mem:<19} {img_sz:<9} {image}'
+            line = f'{indicator} {name:<26} {stack:<12} {status:<12} {mem:<19} {img_sz:<9} {image}'
             try: win.addstr(y, 2, line[:w-4], curses.color_pair(C_SELECTED))
             except: pass
         else:
             try:
                 win.addstr(y, 2, f'{indicator} ', curses.color_pair(color))
                 win.addstr(y, 4, f'{name:<26}', curses.color_pair(C_NORMAL))
-                win.addstr(y, 31, f'{status:<12}', curses.color_pair(C_DIM))
-                win.addstr(y, 43, f'{mem:<19}', curses.color_pair(C_YELLOW if mem else C_DIM))
-                win.addstr(y, 62, f'{img_sz:<9}', curses.color_pair(C_CYAN if img_sz else C_DIM))
-                win.addstr(y, 71, f'{image}'[:w-73], curses.color_pair(C_DIM))
+                win.addstr(y, 31, f'{stack:<12}', curses.color_pair(C_GREEN if stack else C_DIM))
+                win.addstr(y, 44, f'{status:<12}', curses.color_pair(C_DIM))
+                win.addstr(y, 56, f'{mem:<19}', curses.color_pair(C_YELLOW if mem else C_DIM))
+                win.addstr(y, 75, f'{img_sz:<9}', curses.color_pair(C_CYAN if img_sz else C_DIM))
+                win.addstr(y, 84, f'{image}'[:w-86], curses.color_pair(C_DIM))
             except: pass
 
 def draw_stacks_tab(win, h, w, stacks, sel, scroll):
@@ -2249,13 +2299,21 @@ def main(stdscr):
     t2.start()
 
     # Wait for first data load
-    stdscr.addstr(0, 0, 'Loading...', curses.color_pair(C_DIM))
-    stdscr.refresh()
+    _wf = 0
     while True:
         with data_lock:
             if app_data['last_update'] > 0:
                 break
-        time.sleep(0.1)
+        try:
+            stdscr.erase()
+            draw_whale_frame(stdscr, _wf)
+            stdscr.refresh()
+        except:
+            pass
+        _wf += 1
+        time.sleep(0.08)
+    try: stdscr.erase()
+    except: pass
 
     tab    = 0   # 0=containers 1=stacks 2=backup 3=build 4=configs
     sel    = 0

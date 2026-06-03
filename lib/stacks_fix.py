@@ -71,6 +71,8 @@ def load_conf():
         "FIX_AUTO_NETWORKS": "",                         # space-separated networks to add to every service
         "FIX_AUTO_LINK_NETWORKS": "0",
         "FIX_AUTHORITATIVE_NETWORKS": "1",  # 1=wipe+set exact nets (removes junk); 0=additive
+        "FIX_NORMALIZE_DOMAINS": "0",  # 1=set hostname=<name>, domainname=<name>.<DOMAIN> for every container
+        "FIX_DOMAIN_BLACKLIST": "",    # comma-list of domains to NEVER normalize (e.g. example.org for netbird)
         "FIX_FORCE_VOLUME_BASE": "0",  # 1=force ALL /home/*/docker/ bind paths to FIX_VOLUME_BASE (normalize). DEFAULT OFF
         "FIX_AUTO_NAME_CONTAINERS": "0",  # 1=rename containers (loner=oneword, family=root_role) + update all refs. DEFAULT OFF for others
         "FIX_SYNC_DYNAMICS_NAMES": "0",  # 1=also apply rename to Traefik dynamic configs (keeps routing in sync). DEFAULT OFF
@@ -97,7 +99,63 @@ def load_conf():
         "FIX_HC_SKIP": "",
         "STACKS_DIR": STACKS_DIR,
     }
-    if os.path.isfile(CONF_PATH):
+    # ── YAML config support (clean readable format) ──────────────────────
+    _yaml_path = os.path.join(os.path.dirname(CONF_PATH), "stacks.yaml")
+    _yaml_loaded = False
+    if os.path.isfile(_yaml_path):
+        try:
+            import yaml as _yaml
+            _YMAP = {
+                'stacks_folder':'STACKS_DIR','dynamics_folder':'DYNAMICS_DIR','snapshots_folder':'SNAPSHOT_DIR',
+                'info_log':'INFO_LOG','volume_folder':'FIX_VOLUME_BASE','delay_between_stacks':'DELAY',
+                'master_network':'FIX_AUTO_NETWORKS','authoritative_networks':'FIX_AUTHORITATIVE_NETWORKS',
+                'link_family_networks':'FIX_AUTO_LINK_NETWORKS','stack_wide_network':'FIX_AUTO_COMPOSE_NETWORK',
+                'network_subnet_base':'FIX_SUBNET_BASE','build_network':'PRIMARY_NETWORK','build_subnet':'PRIMARY_SUBNET',
+                'auto_name_containers':'FIX_AUTO_NAME_CONTAINERS','sync_all_names':'FIX_SYNC_ALL_NAMES',
+                'sync_dynamic_names':'FIX_SYNC_DYNAMICS_NAMES','auto_name_stack_files':'FIX_AUTO_NAME',
+                'convert_to_bind_mounts':'FIX_CONVERT_NAMED_TO_BIND','force_volume_folder':'FIX_FORCE_VOLUME_BASE',
+                'external_volumes':'FIX_EXTERNAL_VOLUMES','remove_all_depends':'FIX_REMOVE_DEPENDS',
+                'replace_broken_healthchecks':'FIX_REPLACE_BROKEN_HC','remove_orphan_networks':'FIX_REMOVE_ORPHANS',
+                'deep_inspect':'FIX_DEEP_INSPECT','backup_before_changes':'FIX_BACKUP',
+                'auto_create_creator':'FIX_AUTO_CREATE_CREATOR','creator_name':'FIX_CREATOR_NAME',
+                'creator_max_networks':'FIX_CREATOR_MAX_NETWORKS','creator_max_volumes':'FIX_CREATOR_MAX_VOLUMES',
+                'force_new_creator':'FIX_FORCE_NEW_CREATOR','ip_range_start':'IP_RANGE_START','ip_range_end':'IP_RANGE_END',
+                'warn_on_ip_collision':'IP_COLLISION_WARN','autofix_ip_collisions':'IP_COLLISION_AUTOFIX',
+                'skip_host_network_mode':'NETWORK_MODE_SKIP','port_range_start':'PORT_RANGE_START','port_range_end':'PORT_RANGE_END',
+                'warn_on_port_collision':'PORT_COLLISION_WARN','force_all_healthchecks':'FIX_FORCE_HC',
+                'sablier_scaling':'SABLIER_SCALE_ENABLED','auto_group_naming':'SCALE_AUTO_GROUP',
+                'check_for_updates':'UPDATE_CHECK_ENABLED','update_check_hours':'UPDATE_CHECK_INTERVAL',
+                'update_running_only':'UPDATE_CHECK_RUNNING_ONLY','auto_pull_updates':'UPDATE_AUTO_PULL',
+                'notify_on_updates':'UPDATE_NOTIFY','domain':'DOMAIN','descriptions_file':'BUILD_DESC_FILE',
+                'default_description':'BUILD_DEFAULT_DESC','run_fix_after_build':'BUILD_RUN_FIX',
+                'normalize_domains':'FIX_NORMALIZE_DOMAINS',
+            }
+            _YLIST = {
+                'never_rename':('FIX_RENAME_IGNORE',','),'ip_blacklist':('IP_BLACKLIST',','),
+                'locked_ips':('LOCKED_IPS',','),'ip_port_locked':('IP_PORT_LOCKED_CONTAINERS',','),
+                'port_blacklist':('PORT_BLACKLIST',','),'skip_healthcheck':('FIX_HC_SKIP',' '),
+                'never_sleep':('SCALE_SKIP_CONTAINERS',' '),'update_registries':('UPDATE_CHECK_REGISTRIES',','),
+                'update_skip_images':('UPDATE_SKIP_IMAGES',','),
+                'domain_blacklist':('FIX_DOMAIN_BLACKLIST',','),
+            }
+            _ydata = _yaml.safe_load(open(_yaml_path)) or {}
+            for _yk, _yv in _ydata.items():
+                if _yk == 'stack_order': cfg['STACKS'] = _yv; continue
+                if _yk == 'health_check_domains': cfg['DOMAINS'] = _yv; continue
+                if _yk in _YLIST:
+                    _fk, _sep = _YLIST[_yk]
+                    cfg[_fk] = _sep.join(str(x) for x in (_yv or []))
+                    continue
+                if _yk in _YMAP:
+                    _fk = _YMAP[_yk]
+                    cfg[_fk] = ("1" if _yv else "0") if isinstance(_yv, bool) else str(_yv)
+                    continue
+                cfg[_yk] = _yv
+            _yaml_loaded = True
+        except Exception as _ye:
+            pr(f"{Y}\u26a0 Could not read stacks.yaml ({_ye}); falling back to .conf{X}")
+
+    if not _yaml_loaded and os.path.isfile(CONF_PATH):
         try:
             for line in open(CONF_PATH):
                 line = line.strip()
@@ -1689,6 +1747,42 @@ def create_volume_dirs(paths, dry_run=False):
                     created.append(f"failed: {path} ({e})")
     return created
 
+def normalize_host_domain(content, domain="example.com", blacklist_domains=None):
+    """For every service with a container_name, set hostname: <name> and
+    domainname: <name>.<domain>. Skip services whose current domainname ends
+    in a blacklisted domain (configs hardcode it, e.g. netbird/example.org)."""
+    if blacklist_domains is None: blacklist_domains = []
+    lines = content.split('\n')
+    out = list(lines); n = 0; N = len(lines)
+    svc_starts = [idx for idx,l in enumerate(lines) if re.match(r'^  [A-Za-z0-9_.-]+:\s*$', l)]
+    svc_starts.append(N)
+    for si in range(len(svc_starts)-1):
+        b_start, b_end = svc_starts[si], svc_starts[si+1]
+        block = lines[b_start:b_end]
+        cname = None
+        for l in block:
+            m = re.match(r'^\s*container_name:\s*(\S+)', l)
+            if m: cname = m.group(1).strip().strip(chr(34)).strip(chr(39)); break
+        if not cname: continue
+        cur_domain = None
+        for l in block:
+            m = re.match(r'^\s*domainname:\s*(\S+)', l)
+            if m: cur_domain = m.group(1).strip().strip(chr(34)).strip(chr(39)); break
+        if cur_domain and any(cur_domain.endswith(bd) for bd in blacklist_domains):
+            continue
+        want_host, want_dom = cname, cname + "." + domain
+        for j in range(b_start, b_end):
+            hm = re.match(r'^(\s*)hostname:\s*(.*)$', out[j])
+            dm = re.match(r'^(\s*)domainname:\s*(.*)$', out[j])
+            if hm:
+                newl = hm.group(1) + "hostname: " + want_host
+                if newl != out[j]: out[j]=newl; n+=1
+            elif dm:
+                newl = dm.group(1) + "domainname: " + want_dom
+                if newl != out[j]: out[j]=newl; n+=1
+    return '\n'.join(out), n
+
+
 def apply_renames(stacks_dir, rmap, dry_run=True):
     """Apply old->new container renames across ALL files, updating every reference.
     Replaces whole-word occurrences (longest names first to avoid partial matches).
@@ -1775,7 +1869,7 @@ def build_rename_map(stacks_dir):
             else:
                 nw = root + '_' + '_'.join(role)
         else:
-            nw = cn.replace('-', '').replace('.', '')
+            nw = cn.replace('-', '').replace('.', '').replace('_', '')
         if nw != cn:
             rmap[cn] = nw
     return rmap
@@ -3009,6 +3103,30 @@ def main():
                 pr(f"  {G}\u2714 all container names already clean{X}")
         except Exception as _ne:
             pr(f"  {R}\u2718 auto-naming error: {_ne}{X}")
+
+    # ── Domainname/hostname normalization (every fix when enabled) ───────────
+    if on(cfg.get("FIX_NORMALIZE_DOMAINS", "0")):
+        pr(f"\n{C}\U0001f310 Normalizing hostnames/domainnames{X}")
+        _dom = cfg.get("DOMAIN", "example.com")
+        _bl = [x.strip() for x in cfg.get("FIX_DOMAIN_BLACKLIST", "").replace(",", " ").split() if x.strip()]
+        _nd_total = 0; _nd_files = 0
+        _ndtargets = files + ([] )
+        for _f in files:
+            try:
+                _c = open(_f).read()
+                _nc, _cn = normalize_host_domain(_c, _dom, _bl)
+                if _cn and _nc != _c:
+                    _nd_total += _cn; _nd_files += 1
+                    if not dry_run:
+                        shutil.copy2(_f, _f + ".bak-domnorm-%d" % int(time.time()))
+                        open(_f, "w").write(_nc)
+            except Exception as _de:
+                pr(f"  {R}\u2718 domain-normalize error on {_os.path.basename(_f)}: {_de}{X}")
+        if dry_run:
+            pr(f"  {Y}[dry-run] would normalize {_nd_total} host/domain line(s) in {_nd_files} file(s){X}")
+        else:
+            pr(f"  {G}\u2714 normalized {_nd_total} host/domain line(s) in {_nd_files} file(s){X}")
+            total += _nd_total
 
     # ── Phase 0.5: Corruption repair ────────────────────────────────────────
     # Uses stacks_repair.py — learned from dev_1.yml reference file
