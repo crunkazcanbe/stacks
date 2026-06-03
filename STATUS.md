@@ -94,3 +94,20 @@ service or stack. MUST preserve anything Josie added since the snapshot.
 - spelling/typo + name fixer
 - snapshot-piece-pull: LAST RESORT, pull just broken fragment from .good (not whole file)
 - per-service up-test-sablier-reassemble loop (divide-and-conquer)
+
+## NEXT FEATURE — CONTAINER AUTO-NAMING (config option, NOT yet built)
+Goal: clean family-based container names. Head = bare family name; members = head_role.
+  e.g. supabase-auth family -> supabase, supabase_db, supabase_redis, supabase_auth, supabase_meta
+Network already uses <root>_net (supabase_net) — naming should match that root.
+Config flag: FIX_AUTO_NAME_CONTAINERS (default OFF until proven).
+CRITICAL — rename is high-blast-radius. Must update EVERY reference atomically:
+  - container_name itself
+  - depends_on entries pointing at old name (all files)
+  - env vars / DB URLs / connection strings referencing old name
+  - extra_hosts entries
+  - Sablier + Traefik labels referencing old name
+  - any cross-stack references
+Build order: (1) compute new name per svc from family head+role, (2) build old->new map for
+  ALL containers first, (3) do a global find/replace of references across all 30 files using the map,
+  (4) test on copies, confirm depends/connections still resolve, (5) flag-gate, default off.
+Do NOT ship without testing inter-service connections survive the rename.
