@@ -134,6 +134,18 @@ def _load_family_whitelist():
     leaves a container with no real (2+) family."""
     import os as _os
     wl = {}
+    # prefer families.yaml (clean YAML master); fall back to families.conf
+    try:
+        import yaml as _y
+        _yp = _os.path.expanduser("~/.config/stacks/families.yaml")
+        if _os.path.exists(_yp):
+            for m, h in (_y.safe_load(open(_yp)) or {}).items():
+                h = str(h)
+                if h.endswith('_net'): h = h[:-4]
+                if m and h: wl[str(m)] = h
+            if wl: return wl
+    except Exception:
+        pass
     cp = _os.path.expanduser("~/.config/stacks/families.conf")
     try:
         for line in open(cp):

@@ -1770,6 +1770,14 @@ def normalize_host_domain(content, domain="example.com", blacklist_domains=None)
             if m: cur_domain = m.group(1).strip().strip(chr(34)).strip(chr(39)); break
         if cur_domain and any(cur_domain.endswith(bd) for bd in blacklist_domains):
             continue
+        # network_mode (host / container:* / service:*) forbids hostname+domainname.
+        # Docker errors "conflicting options: hostname and the network mode" and the
+        # whole stack aborts. So for these, STRIP any hostname/domainname instead.
+        if any(re.match(r'^\s*network_mode:\s*\S', l) for l in block):
+            for j in range(b_start, b_end):
+                if re.match(r'^\s*hostname:\s*', out[j]) or re.match(r'^\s*domainname:\s*', out[j]):
+                    out[j] = None; n += 1
+            continue
         want_host, want_dom = cname, cname + "." + domain
         for j in range(b_start, b_end):
             hm = re.match(r'^(\s*)hostname:\s*(.*)$', out[j])
@@ -1780,6 +1788,7 @@ def normalize_host_domain(content, domain="example.com", blacklist_domains=None)
             elif dm:
                 newl = dm.group(1) + "domainname: " + want_dom
                 if newl != out[j]: out[j]=newl; n+=1
+    out = [l for l in out if l is not None]   # drop stripped hostname/domainname lines
     return '\n'.join(out), n
 
 
@@ -2416,6 +2425,10 @@ def load_global_inject_conf():
             if '=' in line:
                 k, v = line.split('=', 1)
                 cfg[k.strip()] = v.strip()
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        cfg.update(_sc.load_named('global_inject'))   # YAML master overlay (global_inject.yaml wins)
+    except Exception: pass
     if str(cfg.get('INJECT_FILL_ALL','0')).lower() in ('1','true','force'):
         for _k in ('INJECT_DEPLOY','INJECT_BLKIO','INJECT_ULIMITS','INJECT_COMMON_CAPS',
                    'INJECT_HOSTNAME','INJECT_STORAGE_OPT','INJECT_MAC','INJECT_LABELS',

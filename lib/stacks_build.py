@@ -141,9 +141,13 @@ def load_conf():
             "/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4:"
             "/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4:ro"],
     }
-    if os.path.exists(BUILD_CONF):
-        try: d.update(json.load(open(BUILD_CONF)))
-        except: pass
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        d.update({k: v for k, v in _sc.load_doc('build').items() if not str(k).startswith('_')})
+    except Exception:
+        if os.path.exists(BUILD_CONF):
+            try: d.update(json.load(open(BUILD_CONF)))
+            except: pass
     return d
 
 # ── Registry search — uses stacks regsearch TUI ───────────────────────────────

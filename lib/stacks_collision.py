@@ -179,6 +179,10 @@ def load_conf():
                 k, v = l.split("=", 1)
                 cfg[k.strip()] = v.strip().strip('"\'')
     except: pass
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        cfg.update(_sc.load())   # YAML master overlay (stacks.yaml wins)
+    except Exception: pass
     return cfg
 
 def _update_conf(key, value):

@@ -5,9 +5,11 @@ Checks if running container images have newer versions available
 """
 import os, re, glob, json, urllib.request, urllib.parse, time
 
-STACKS_DIR  = "/srv/stacks/Stacks"
-CONF_FILE   = os.path.expanduser("~/.config/stacks/stacks.conf")
-CACHE_FILE  = os.path.expanduser("~/.config/stacks/update_cache.json")
+STACKS_DIR   = "/srv/stacks/Stacks"
+CONF_FILE    = os.path.expanduser("~/.config/stacks/stacks.conf")
+CACHE_FILE   = os.path.expanduser("~/.config/stacks/update_cache.json")
+HISTORY_FILE = os.path.expanduser("~/.config/stacks/update_history.json")
+HISTORY_MAX  = 500
 UA = "Mozilla/5.0 (stacks-updater/1.0)"
 TIMEOUT = 10
 
@@ -26,6 +28,10 @@ def load_conf():
                 k, v = l.split("=", 1)
                 cfg[k.strip()] = v.strip().strip('"')
     except: pass
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        cfg.update(_sc.load())   # YAML master overlay (stacks.yaml wins)
+    except Exception: pass
     return cfg
 
 def load_cache():
@@ -35,6 +41,40 @@ def load_cache():
 def save_cache(cache):
     try: json.dump(cache, open(CACHE_FILE, "w"), indent=2)
     except: pass
+
+def load_history():
+    try: return json.load(open(HISTORY_FILE))
+    except: return []
+
+def save_history(hist):
+    try: json.dump(hist[-HISTORY_MAX:], open(HISTORY_FILE, "w"), indent=2)
+    except: pass
+
+def _short(d):
+    """Short form of a sha256:... digest for display."""
+    if not d: return "—"
+    if ":" in d: d = d.split(":", 1)[1]
+    return d[:12]
+
+def record_history(hist, event, image, tag, stacks, old, new):
+    """Append a history record (newest appended to end)."""
+    hist.append({
+        "ts":     int(time.time()),
+        "event":  event,            # "published" (remote changed) | "pulled" (local changed)
+        "image":  image,
+        "tag":    tag,
+        "stacks": stacks,
+        "old":    old or "",
+        "new":    new or "",
+        "old_short": _short(old),
+        "new_short": _short(new),
+    })
+
+def get_history(limit=None):
+    """Return history newest-first."""
+    hist = load_history()
+    hist = sorted(hist, key=lambda r: r.get("ts", 0), reverse=True)
+    return hist[:limit] if limit else hist
 
 def get_all_images():
     """Get all images from compose files."""
@@ -130,6 +170,8 @@ def check_updates(force=False):
         return []
 
     cache = load_cache()
+    hist  = load_history()
+    hist_dirty = False
     interval = int(cfg.get("UPDATE_CHECK_INTERVAL","24")) * 3600
     skip = set(s.strip() for s in cfg["UPDATE_SKIP_IMAGES"].split(",") if s.strip())
     images = get_all_images()
@@ -174,14 +216,66 @@ def check_updates(force=False):
             "checked": int(time.time()),
             "error": remote.get("error",""),
         }
+
+        # ── record history on any digest change vs the last cached entry ──
+        prev = cached
+        prev_remote = prev.get("remote_digest", "")
+        prev_local  = prev.get("local_digest", "")
+        if remote_digest and prev_remote and remote_digest != prev_remote:
+            record_history(hist, "published", image, tag, stacks, prev_remote, remote_digest)
+            hist_dirty = True
+        if local_digest and prev_local and local_digest != prev_local:
+            record_history(hist, "pulled", image, tag, stacks, prev_local, local_digest)
+            hist_dirty = True
+
         cache[image] = entry
         results.append(entry)
 
     save_cache(cache)
+    if hist_dirty:
+        save_history(hist)
     return results
+
+def pull_updates():
+    """Pull every image that currently has an update available, recording history."""
+    import subprocess
+    cache = load_cache()
+    targets = [v for v in cache.values() if isinstance(v, dict) and v.get("has_update")]
+    if not targets:
+        print("No updates to pull.")
+        return
+    print(f"Pulling {len(targets)} image(s)...\n")
+    for r in targets:
+        img = r.get("image", "")
+        print(f"⬇ docker pull {img}")
+        try:
+            subprocess.run(["docker", "pull", img], timeout=600)
+        except Exception as e:
+            print(f"  pull failed: {e}")
+    print("\nRe-checking digests to update history...")
+    check_updates(force=True)
+
+def show_history(limit=40):
+    hist = get_history(limit)
+    if not hist:
+        print("No update history yet.")
+        return
+    print(f"\nUpdate history (newest {len(hist)}):\n")
+    for r in hist:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("ts", 0)))
+        ev = r.get("event", "")
+        arrow = "⬆" if ev == "published" else "⬇"
+        print(f"  {when}  {arrow} {ev:<9} {r.get('image',''):<44} "
+              f"{r.get('old_short','—')} → {r.get('new_short','—')}")
 
 if __name__ == "__main__":
     import sys
+    if "--history" in sys.argv:
+        show_history()
+        sys.exit(0)
+    if "--pull" in sys.argv:
+        pull_updates()
+        sys.exit(0)
     force = "--force" in sys.argv
     print("Checking for image updates...")
     results = check_updates(force=force)
@@ -195,3 +289,10 @@ if __name__ == "__main__":
         print("\nUpdates available:")
         for r in updates:
             print(f"  {r['image']:<50} stacks: {', '.join(r['stacks'])}")
+    hist = get_history(8)
+    if hist:
+        print("\nRecent changes:")
+        for r in hist:
+            when = time.strftime("%m-%d %H:%M", time.localtime(r.get("ts", 0)))
+            arrow = "⬆" if r.get("event") == "published" else "⬇"
+            print(f"  {when} {arrow} {r.get('image',''):<44} {r.get('old_short','—')} → {r.get('new_short','—')}")

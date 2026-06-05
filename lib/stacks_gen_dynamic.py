@@ -10,8 +10,8 @@ import re, os, sys, yaml
 DEFAULTS = {
     'PRIMARY_DOMAIN':    'example.com',
     'SECONDARY_DOMAIN':  'example.net',
-    'AUTHENTIK_URL':     'http://authentik-server:9000',
-    'CROWDSEC_URL':      'http://crowdsec-bouncer:8080',
+    'AUTHENTIK_URL':     'http://authentik_server:9000',
+    'CROWDSEC_URL':      'http://crowdsec_bouncer:8080',
     'SABLIER_URL':       'http://sablier:10000',
     'SABLIER_THEME':     'ghost',
     'SABLIER_DURATION':  '1h',
@@ -20,10 +20,29 @@ DEFAULTS = {
     'GEN_MIDDLEWARES':   '1',
     'GEN_SABLIER':       '1',
     'GEN_TCP':           '1',
-    'GEN_AUTH':          '1',   # include authentik middleware
+    'GEN_AUTH':          '1',   # include authentik middleware (Authentik = the main gate)
     'GEN_CROWDSEC':      '1',   # include crowdsec middleware
     'GEN_DOMAIN':        'primary',  # primary|secondary|both
+    # ── Security hardening (config-toggleable; safe defaults) ──────────────────
+    'GEN_PERMISSIONS_POLICY': '1',   # add a Permissions-Policy response header (safe, pure addition)
+    'PERMISSIONS_POLICY': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
+    'GEN_CSP':                '0',   # add Content-Security-Policy (OFF by default — CSP breaks many apps)
+    'CSP_POLICY': "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' https: wss:; font-src 'self' data:; frame-ancestors 'self'",
+    'GEN_CF_IPALLOW':         '0',   # restrict origin to Cloudflare + LAN IPs (OFF by default — can lock out access)
+    'CF_TRUSTED_IPS':         '',    # extra comma-separated CIDRs to always allow (e.g. your VPN subnet)
 }
+
+# Cloudflare published edge ranges (IPv4 + IPv6) + private LAN, used by the
+# optional cloudflare-ipallow middleware. Update from https://www.cloudflare.com/ips/
+CLOUDFLARE_IPS = [
+    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+    '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+    '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+    '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+]
+PRIVATE_LAN_IPS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.1/32']
 
 # TCP database port map
 TCP_PORTS = {
@@ -36,7 +55,7 @@ TCP_PORTS = {
 }
 
 STANDARD_MIDDLEWARES = [
-    'https-header', 'crowdsec-bouncer', 'authentik-auth',
+    'https-header', 'crowdsec_bouncer', 'authentik-auth',
     'global-retry', 'compress', 'inflight', 'buffering', 'rate-limit'
 ]
 
@@ -48,6 +67,10 @@ def load_conf(conf_path):
             if '=' in line and not line.startswith('#'):
                 k, v = line.split('=', 1)
                 cfg[k.strip()] = v.strip().strip('"').strip("'")
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        cfg.update(_sc.load())   # YAML master overlay (stacks.yaml wins)
+    except Exception: pass
     return cfg
 
 def get_service_port(svc_def):
@@ -97,6 +120,17 @@ def service_has_traefik(svc_def):
         if 'traefik.enable=true' in str(l).lower(): return True
     return False
 
+def service_sablier_enabled(svc_def):
+    """False if the service is explicitly sablier.enable=false (always-on, never sleeps).
+    Always-on services (Authentik, CrowdSec, Traefik, ...) must NOT get a Sablier
+    middleware, or every request to them shows the wake 'ghost' loading screen forever."""
+    labels = svc_def.get('labels', [])
+    if isinstance(labels, dict):
+        return str(labels.get('sablier.enable', 'true')).lower() != 'false'
+    for l in labels:
+        if 'sablier.enable=false' in str(l).lower(): return False
+    return True
+
 def get_subdomain(name, svc_def):
     """Get subdomain from traefik label or derive from name."""
     labels = svc_def.get('labels', [])
@@ -111,9 +145,10 @@ def get_subdomain(name, svc_def):
 
 def gen_router(name, subdomain, domain, svc_name, sablier_mw, cfg):
     mws = []
+    if cfg.get('GEN_CF_IPALLOW') == '1': mws.append('cloudflare-ipallow')
     if sablier_mw: mws.append(sablier_mw)
     mws.append('https-header')
-    if cfg.get('GEN_CROWDSEC') == '1': mws.append('crowdsec-bouncer')
+    if cfg.get('GEN_CROWDSEC') == '1': mws.append('crowdsec_bouncer')
     if cfg.get('GEN_AUTH') == '1': mws.append('authentik-auth')
     mws += ['global-retry', 'compress', 'inflight', 'buffering', 'rate-limit']
     mw_str = ', '.join(mws)
@@ -174,10 +209,32 @@ def gen_tcp_service(name, container, port):
         f'          - address: "{container}:{port}"\n'
     )
 
+def gen_cloudflare_ipallow(cfg):
+    """Optional: only accept traffic from Cloudflare edge + LAN (+ user-trusted CIDRs).
+    Uses X-Forwarded-For depth=1 so the *real* client IP (from cloudflared) is checked,
+    not the docker-network hop. Off unless GEN_CF_IPALLOW=1."""
+    extra = [c.strip() for c in cfg.get('CF_TRUSTED_IPS', '').split(',') if c.strip()]
+    ranges = CLOUDFLARE_IPS + PRIVATE_LAN_IPS + extra
+    lines = '\n'.join(f'          - "{r}"' for r in ranges)
+    return (
+        "    cloudflare-ipallow:\n"
+        "      ipAllowList:\n"
+        "        sourceRange:\n"
+        f"{lines}\n"
+        "        ipStrategy:\n"
+        "          depth: 1\n"
+    )
+
 def gen_standard_middlewares(cfg):
     auth_url = cfg['AUTHENTIK_URL']
     crowdsec_url = cfg['CROWDSEC_URL']
-    return f"""
+    # Optional extra security response headers, indented to sit under customResponseHeaders
+    _extra_hdrs = ''
+    if cfg.get('GEN_PERMISSIONS_POLICY') == '1':
+        _extra_hdrs += f'          Permissions-Policy: "{cfg["PERMISSIONS_POLICY"]}"\n'
+    if cfg.get('GEN_CSP') == '1':
+        _extra_hdrs += f'          Content-Security-Policy: "{cfg["CSP_POLICY"]}"\n'
+    out = f"""
     https-header:
       headers:
         customRequestHeaders:
@@ -190,6 +247,10 @@ def gen_standard_middlewares(cfg):
           Strict-Transport-Security: "max-age=31536000; includeSubDomains; preload"
           Server: ""
           X-Robots-Tag: "noindex, nofollow"
+{_extra_hdrs}"""
+    if cfg.get('GEN_CF_IPALLOW') == '1':
+        out += "\n" + gen_cloudflare_ipallow(cfg) + "\n"
+    out += f"""
 
     global-retry:
       retry:
@@ -235,20 +296,22 @@ def gen_standard_middlewares(cfg):
           - X-authentik-uid
           - X-authentik-jwt
 
-    crowdsec-bouncer:
+    crowdsec_bouncer:
       forwardAuth:
         address: "{crowdsec_url}/api/v1/forwardAuth"
         trustForwardHeader: true
 """
+    return out
 
 def generate_dynamic(stack_path, out_path, cfg):
     """Generate a dynamic config from a compose file."""
     try:
         content = open(stack_path).read()
-        # Strip YAML anchors for parsing
-        clean = re.sub(r'<<:\s*\*\w+\n?', '', content)
-        clean = re.sub(r'&\w+\s*\n', '\n', clean)
-        data = yaml.safe_load(clean)
+        # Parse with YAML anchors resolved NATIVELY (they're defined in-file).
+        # The dynamics only need container_name / ports / labels, so merged anchor
+        # keys (caps, tcmalloc, ...) are harmless. Hand-stripping anchors was
+        # fragile — it broke on hyphenated names and inline {<<: *x} flow maps.
+        data = yaml.safe_load(content)
     except Exception as e:
         print(f"  Parse error {os.path.basename(stack_path)}: {e}")
         return False
@@ -281,14 +344,14 @@ def generate_dynamic(stack_path, out_path, cfg):
 
         port = get_service_port(svc_def)
         subdomain = get_subdomain(svc_name, svc_def)
-        sablier_mw = f'sablier-{svc_name}' if cfg.get('GEN_SABLIER') == '1' else ''
+        sablier_mw = f'sablier-{svc_name}' if (cfg.get('GEN_SABLIER') == '1' and service_sablier_enabled(svc_def)) else ''
 
         if cfg.get('GEN_ROUTERS') == '1':
             routers_out += gen_router(svc_name, subdomain, domain,
                                       f'{svc_name}-svc', sablier_mw, cfg)
         if cfg.get('GEN_SERVICES') == '1':
             services_out += gen_service(svc_name, container, port)
-        if cfg.get('GEN_SABLIER') == '1':
+        if cfg.get('GEN_SABLIER') == '1' and service_sablier_enabled(svc_def):
             middlewares_out += gen_sablier_mw(svc_name, container, cfg)
 
     if not routers_out and not services_out:
@@ -326,8 +389,15 @@ def main():
 
     target = sys.argv[1] if len(sys.argv) > 1 else 'all'
 
+    # Stacks that run on a REMOTE host (VPS) — their compose lives here for
+    # editing but they must NOT get a local Traefik dynamic, or their routers
+    # collide with the local stacks' routers for the same hostnames (duplicate
+    # traefik.love/pangolin.love/etc. → non-deterministic routing + ghost
+    # middlewares). Skip any '*-ext' stack during 'all'.
+    EXCLUDE_SUFFIXES = ('-ext.yml',)
     if target == 'all':
-        files = sorted(f for f in os.listdir(stacks_dir) if f.endswith('.yml'))
+        files = sorted(f for f in os.listdir(stacks_dir)
+                       if f.endswith('.yml') and not f.endswith(EXCLUDE_SUFFIXES))
     else:
         files = [target if target.endswith('.yml') else target + '.yml']
 

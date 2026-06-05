@@ -283,6 +283,48 @@ def draw_footer(win, h, w, hints):
         win.attroff(curses.color_pair(C_DIM))
     except: pass
 
+_FILTER_ALPHA = "abcdefghijklmnopqrstuvwxyz#"
+
+def list_filter(items, key_fns, letter, inline):
+    """Filter items by a leading-letter jump and/or an inline substring.
+    key_fns[0] is the primary key (used for the letter jump); all key_fns are
+    searched for the inline substring. Returns the filtered list."""
+    out = items
+    if letter:
+        if letter == "#":
+            out = [it for it in out
+                   if (str(key_fns[0](it))[:1] or " ") and not str(key_fns[0](it))[:1].isalpha()]
+        else:
+            out = [it for it in out
+                   if str(key_fns[0](it)).lower().lstrip("●○■⚠ ").startswith(letter)]
+    if inline:
+        f = inline.lower()
+        out = [it for it in out
+               if any(f in str(fn(it)).lower() for fn in key_fns)]
+    return out
+
+def draw_filter_bar(win, y, w, letter, inline, inline_mode, shown, total):
+    """Draw an alphabet/search bar (registry-style) on a single row."""
+    try: win.addstr(y, 0, " " * (w-1), curses.color_pair(C_DIM))
+    except: pass
+    x = 2
+    if inline_mode:
+        s = f"/ {inline}_"
+        try: win.addstr(y, x, s[:w-4], curses.color_pair(C_YELLOW))
+        except: pass
+        return
+    for ch in _FILTER_ALPHA:
+        if x > w - 18: break
+        attr = curses.color_pair(C_SELECTED) if letter == ch else curses.color_pair(C_ACCENT)
+        try: win.addstr(y, x, ch, attr)
+        except: pass
+        x += 2
+    tail = f" [{shown}/{total}]"
+    if inline:
+        tail = f" /{inline}{tail}"
+    try: win.addstr(y, max(x, w-len(tail)-2), tail[:w-2], curses.color_pair(C_DIM))
+    except: pass
+
 def draw_border_box(win, y, x, h, w, title=''):
     try:
         win.attron(curses.color_pair(C_POPUP_BDR))
@@ -1100,8 +1142,12 @@ def run_build_wizard(stdscr, new_stack=False):
 
     status("Building compose scaffold...", 80)
     import json as _json
-    try: cfg = _json.load(open(os.path.join(CONF_DIR, "build.conf")))
-    except: cfg = {}
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        cfg = {k: v for k, v in _sc.load_doc('build').items() if not str(k).startswith('_')}
+    except Exception:
+        try: cfg = _json.load(open(os.path.join(CONF_DIR, "build.conf")))
+        except: cfg = {}
     container_name = svc_name
     net_name = container_name.replace("-","_") + "_net"
     cpuset = cfg.get("cpuset","0-15")
@@ -1667,10 +1713,20 @@ CONTAINER_ACTIONS = [
     ("■  Stop",                               "stop"),
     ("↺  Restart",                            "restart"),
     ("⟳  Recreate",                           "recreate"),
+    ("⟳  Recreate + Up",                      "recreate_up"),
+    ("✦  Fix (stack)",                        "fix"),
+    ("✦  Repair (stack)",                     "repair"),
+    ("✦  Fix + Repair (stack)",               "fix_repair"),
+    ("◐  Fix + Recreate + Up",                "fix_recreate"),
+    ("◓  Repair + Recreate + Up",             "repair_recreate"),
+    ("★  Fix + Repair + Recreate + Up",       "full_repair"),
+    ("◉  Repair + Fix + Recreate + Up",       "deep_repair"),
     ("↑  Scale ON",                           "scale_on"),
     ("↓  Scale OFF",                          "scale_off"),
     ("↑  Proxy ON",                           "proxy_on"),
     ("↓  Proxy OFF",                          "proxy_off"),
+    ("🔍  Inspect",                           "inspect"),
+    ("🌐  Edit IP",                           "edit_ip"),
     ("✕  Cancel",                             None),
 ]
 
@@ -1819,6 +1875,117 @@ Mounts: {{len .Mounts}} volumes''',
         elif k == curses.KEY_DOWN: scroll = min(max(0,len(lines)-visible), scroll+1)
         elif k in (27, ord('q')): break
 
+
+def _get_container_ip(cname):
+    """Current IP for a container from ip_assignments.conf (container=IP[:port])."""
+    try:
+        for line in open(os.path.expanduser('~/.config/stacks/ip_assignments.conf')):
+            line=line.strip()
+            if line.startswith(cname+'='):
+                return line.split('=',1)[1].split(':')[0].strip()
+    except Exception: pass
+    return ''
+
+def _apply_container_ip(stack_file, cname, old_ip, new_ip):
+    """Replace old_ip->new_ip inside cname's service block in the compose, and
+    update ip_assignments.conf. Caller recreates the container afterward."""
+    try:
+        ap=os.path.expanduser('~/.config/stacks/ip_assignments.conf')
+        lines=open(ap).read().splitlines() if os.path.exists(ap) else []
+        out=[]; found=False
+        for l in lines:
+            if l.strip().startswith(cname+'='):
+                rest=l.split('=',1)[1]; port=rest.split(':',1)[1] if ':' in rest else ''
+                out.append(f"{cname}={new_ip}"+(f":{port}" if port else "")); found=True
+            else: out.append(l)
+        if not found: out.append(f"{cname}={new_ip}")
+        open(ap,'w').write("\n".join(out)+"\n")
+    except Exception: pass
+    if not stack_file or not old_ip: return
+    try:
+        lines=open(stack_file,encoding='utf-8').read().split('\n')
+        cn=None
+        for i,l in enumerate(lines):
+            if re.match(r'^\s*container_name:\s*"?'+re.escape(cname)+r'"?\s*$', l): cn=i; break
+        if cn is None: return
+        skey=cn
+        while skey>0 and not re.match(r'^  [A-Za-z0-9_.-]+:\s*$', lines[skey]): skey-=1
+        end=skey+1
+        while end<len(lines) and not re.match(r'^  [A-Za-z0-9_.-]+:\s*$', lines[end]): end+=1
+        for j in range(skey,end): lines[j]=lines[j].replace(old_ip,new_ip)
+        open(stack_file,'w',encoding='utf-8').write("\n".join(lines))
+    except Exception: pass
+
+def _prompt_text(stdscr, title, prompt, default=''):
+    """Centered curses single-line text input. Returns string ('' on cancel)."""
+    h,w=stdscr.getmaxyx()
+    pw=max(len(title)+6,len(prompt)+30,46); ph=6
+    win=curses.newwin(ph,pw,(h-ph)//2,(w-pw)//2); win.keypad(True)
+    buf=list(default); curses.curs_set(1)
+    try:
+        while True:
+            win.clear()
+            try: draw_border_box(win,0,0,ph,pw,title[:pw-4])
+            except Exception: pass
+            try: win.addstr(2,2,prompt[:pw-4],curses.color_pair(C_ACCENT))
+            except Exception: pass
+            try: win.addstr(3,2,('> '+''.join(buf))[:pw-4],curses.color_pair(C_NORMAL))
+            except Exception: pass
+            try: win.addstr(4,2,'Enter = save    Esc = cancel'[:pw-4],curses.color_pair(C_DIM))
+            except Exception: pass
+            win.refresh()
+            k=win.getch()
+            if k in (10,13): return ''.join(buf).strip()
+            if k==27: return ''
+            if k in (curses.KEY_BACKSPACE,127,8):
+                if buf: buf.pop()
+            elif 32<=k<127: buf.append(chr(k))
+    finally:
+        curses.curs_set(0)
+
+def show_message_box(stdscr, title, lines):
+    """Scrollable read-only message popup. Any key / ESC closes."""
+    h, w = stdscr.getmaxyx()
+    pw = min(w-4, max(46, max((len(l) for l in lines), default=0) + 6))
+    ph = min(h-4, len(lines) + 5)
+    win = curses.newwin(ph, pw, (h-ph)//2, (w-pw)//2); win.keypad(True)
+    scroll = 0
+    body_h = ph - 4
+    while True:
+        win.clear()
+        try: draw_border_box(win, 0, 0, ph, pw, title[:pw-4])
+        except Exception: pass
+        for i, l in enumerate(lines[scroll:scroll+body_h]):
+            try: win.addstr(2+i, 2, l[:pw-4], curses.color_pair(C_NORMAL))
+            except Exception: pass
+        try: win.addstr(ph-2, 2, "↑↓ scroll   any key / ESC close"[:pw-4], curses.color_pair(C_DIM))
+        except Exception: pass
+        win.refresh()
+        k = win.getch()
+        if k == curses.KEY_UP: scroll = max(0, scroll-1)
+        elif k == curses.KEY_DOWN: scroll = min(max(0, len(lines)-body_h), scroll+1)
+        else: break
+
+def show_update_detail(stdscr, row):
+    """Detail popup for an Updates-tab row: image, stacks, old vs new digests."""
+    import time as _t
+    lines = []
+    lines.append(f"Image:   {row.get('image','')}")
+    if row.get("tag"):    lines.append(f"Tag:     {row.get('tag','')}")
+    stks = row.get("stacks", [])
+    if stks:              lines.append(f"Stacks:  {', '.join(stks)}")
+    if row["kind"] == "update":
+        lines.append("Status:  UPDATE AVAILABLE")
+    else:
+        lines.append(f"Event:   {row.get('event','')}")
+        lines.append(f"When:    {_t.strftime('%Y-%m-%d %H:%M:%S', _t.localtime(row.get('ts',0)))}")
+    lines.append("")
+    lines.append("OLD (was):")
+    lines.append(f"  {row.get('old','') or '—'}")
+    lines.append("NEW (now):")
+    lines.append(f"  {row.get('new','') or '—'}")
+    show_message_box(stdscr, "Update detail", lines)
+
 def do_container_action(stdscr, container_name, stack_file, action):
 
     curses.flushinp()
@@ -1853,6 +2020,54 @@ def do_container_action(stdscr, container_name, stack_file, action):
         else: return
     elif action == 'inspect':
         _show_container_inspect(stdscr, container_name)
+        return
+    elif action == 'edit_ip':
+        cur = _get_container_ip(container_name)
+        new_ip = _prompt_text(stdscr, f'Edit IP — {container_name}', 'New IP:', cur or '192.168.1.')
+        if not new_ip or new_ip == cur: return
+        if not re.match(r'^\d{1,3}(\.\d{1,3}){3}$', new_ip):
+            run_log_popup(stdscr, 'Edit IP', f'echo "Invalid IP: {new_ip}"'); return
+        _apply_container_ip(stack_file, container_name, cur, new_ip)
+        cmd = f'{STACKS_BIN} up {stack_name} {container_name} recreate' if stack_name else f'docker restart {container_name}'
+    # ── fix/repair/recreate single-service combos (mirror the Stacks page) ────
+    elif action in ('fix', 'repair', 'fix_repair', 'recreate_up',
+                    'fix_recreate', 'repair_recreate', 'full_repair', 'deep_repair'):
+        if not stack_name:
+            run_log_popup(stdscr, 'No stack',
+                f'echo "{container_name} has no known stack — cannot fix/repair."')
+            return
+        c_fix      = f'{STACKS_BIN} fix {stack_name}'
+        c_repair   = f'{STACKS_BIN} fix {stack_name} repair'
+        c_recreate = f'{STACKS_BIN} up {stack_name} {container_name} recreate'
+        c_up       = f'{STACKS_BIN} up {stack_name} {container_name}'
+        if action == 'fix':
+            run_log_popup(stdscr, f'Fix → {stack_name}', c_fix)
+        elif action == 'repair':
+            run_log_popup(stdscr, f'Repair → {stack_name}', c_repair)
+        elif action == 'fix_repair':
+            run_cmd_silent(stdscr, f'Fix → {stack_name}', c_fix)
+            run_log_popup(stdscr, f'Repair → {stack_name}', c_repair)
+        elif action == 'recreate_up':
+            run_cmd_silent(stdscr, f'Recreate → {container_name}', c_recreate)
+            run_log_popup(stdscr, f'Up → {container_name}', c_up)
+        elif action == 'fix_recreate':
+            run_cmd_silent(stdscr, f'Fix → {stack_name}', c_fix)
+            run_cmd_silent(stdscr, f'Recreate → {container_name}', c_recreate)
+            run_log_popup(stdscr, f'Up → {container_name}', c_up)
+        elif action == 'repair_recreate':
+            run_cmd_silent(stdscr, f'Repair → {stack_name}', c_repair)
+            run_cmd_silent(stdscr, f'Recreate → {container_name}', c_recreate)
+            run_log_popup(stdscr, f'Up → {container_name}', c_up)
+        elif action == 'full_repair':
+            run_cmd_silent(stdscr, f'Fix → {stack_name}', c_fix)
+            run_cmd_silent(stdscr, f'Repair → {stack_name}', c_repair)
+            run_cmd_silent(stdscr, f'Recreate → {container_name}', c_recreate)
+            run_log_popup(stdscr, f'Up → {container_name}', c_up)
+        elif action == 'deep_repair':
+            run_cmd_silent(stdscr, f'Repair → {stack_name}', c_repair)
+            run_cmd_silent(stdscr, f'Fix → {stack_name}', c_fix)
+            run_cmd_silent(stdscr, f'Recreate → {container_name}', c_recreate)
+            run_log_popup(stdscr, f'Up → {container_name}', c_up)
         return
     else: return
     run_log_popup(stdscr, f'{action} → {container_name}', cmd)
@@ -2173,6 +2388,8 @@ def draw_network_tab(win, h, w, sel=0):
                 "port_col": mod.get_collisions()[1],
                 "ip_map": mod.scan_all_ips(),
                 "next_ip": mod.get_next_available_ip(),
+                "port_map": mod.scan_all_ports(),
+                "conf": mod.load_conf(),
             }
             _net_cache["ts"] = _t.time()
         ip_col   = _net_cache["data"]["ip_col"]
@@ -2180,46 +2397,52 @@ def draw_network_tab(win, h, w, sel=0):
         ip_map   = _net_cache["data"]["ip_map"]
         next_ip  = _net_cache["data"]["next_ip"]
 
+        cfg = _net_cache["data"].get("conf", {})
+        port_map = _net_cache["data"].get("port_map", {})
+        def P(yy, xx, txt, cp=C_NORMAL):
+            try: win.addstr(yy, xx, str(txt)[:max(0, w-xx-1)], curses.color_pair(cp))
+            except Exception: pass
+
         # Summary
-        y = 5
-        try: win.addstr(y, 2, f"IPs in use: {len(ip_map)}   IP collisions: {len(ip_col)}   Port collisions: {len(port_col)}", curses.color_pair(C_YELLOW))
-        except: pass
-        try: win.addstr(y+1, 2, f"Next available IP: {next_ip or 'NONE'}", curses.color_pair(C_GREEN if next_ip else C_RED))
-        except: pass
+        P(5, 2, f"IPs in use: {len(ip_map)}    Ports in use: {len(port_map)}    IP collisions: {len(ip_col)}    Port collisions: {len(port_col)}", C_YELLOW)
+        P(6, 2, f"Next free IP: {next_ip or 'NONE'}", C_GREEN if next_ip else C_RED)
 
-        y = 8
+        # Config panel
+        P(8, 2, "── CONFIG ────────────────────", C_ACCENT)
+        P(9, 4,  f"IP range    : {cfg.get('IP_RANGE_START','?')}  →  {cfg.get('IP_RANGE_END','?')}", C_CYAN)
+        P(10, 4, f"Port range  : {cfg.get('PORT_RANGE_START','?')}  →  {cfg.get('PORT_RANGE_END','?')}", C_CYAN)
+        P(11, 4, f"IP blacklist : {cfg.get('IP_BLACKLIST','') or '(none)'}", C_DIM)
+        P(12, 4, f"IP whitelist : {cfg.get('IP_WHITELIST','') or '(none)'}", C_DIM)
+        P(13, 4, f"Port blacklist: {cfg.get('PORT_BLACKLIST','') or '(none)'}", C_DIM)
+
+        # Collisions
+        y = 15
         if ip_col:
-            try: win.addstr(y, 2, "⚠ IP COLLISIONS:", curses.color_pair(C_RED)); y+=1
-            except: pass
-            for c in ip_col[:8]:
-                owners = ", ".join(f"{s}/{n}" for s,n in c["owners"][:3])
-                try: win.addstr(y, 4, f"{c['type']:12} {c['ip']:18} {owners}"[:w-6], curses.color_pair(C_RED)); y+=1
-                except: pass
+            P(y, 2, "⚠ IP COLLISIONS:", C_RED); y+=1
+            for c in ip_col[:6]:
+                P(y, 4, f"{c['type']:12} {c['ip']:18} " + ", ".join(f"{ss}/{nn}" for ss,nn in c['owners'][:3]), C_RED); y+=1
         else:
-            try: win.addstr(y, 2, "✔ No IP collisions", curses.color_pair(C_GREEN)); y+=1
-            except: pass
-
-        y += 1
+            P(y, 2, "✔ No IP collisions", C_GREEN); y+=1
         if port_col:
-            try: win.addstr(y, 2, "⚠ PORT COLLISIONS:", curses.color_pair(C_RED)); y+=1
-            except: pass
-            for c in port_col[:8]:
-                owners = ", ".join(f"{s}/{n}" for s,n in c["owners"][:3])
-                try: win.addstr(y, 4, f"{c['type']:12} port {c['port']:8} {owners}"[:w-6], curses.color_pair(C_RED)); y+=1
-                except: pass
+            P(y, 2, "⚠ PORT COLLISIONS:", C_RED); y+=1
+            for c in port_col[:6]:
+                P(y, 4, f"{c['type']:12} port {c['port']:8} " + ", ".join(f"{ss}/{nn}" for ss,nn in c['owners'][:3]), C_RED); y+=1
         else:
-            try: win.addstr(y, 2, "✔ No port collisions", curses.color_pair(C_GREEN))
-            except: pass
+            P(y, 2, "✔ No port collisions", C_GREEN); y+=1
 
-        # Show all IPs
-        y += 2
-        try: win.addstr(y, 2, "ALL IPs IN USE:", curses.color_pair(C_YELLOW)); y+=1
-        except: pass
+        # Two columns: IPs in use | Ports in use
+        y += 1
+        col2 = max(42, w//2)
+        P(y, 2, f"IPs IN USE ({len(ip_map)})", C_YELLOW)
+        P(y, col2, f"PORTS IN USE ({len(port_map)})", C_YELLOW)
+        base = y+1; yy = base
         for ip, owners in sorted(ip_map.items()):
-            if y >= h-2: break
-            owner_str = ", ".join(f"{s}/{n}" for s,n in owners[:2])
-            try: win.addstr(y, 4, f"{ip:<18} {owner_str}"[:w-6], curses.color_pair(C_NORMAL)); y+=1
-            except: pass
+            if yy >= h-2: break
+            P(yy, 4, f"{ip:<16} {','.join(nn for _,nn in owners[:1])}", C_NORMAL); yy+=1
+        yy = base
+        for key, owners in sorted(port_map.items()):
+            if yy >= h-2: break
+            P(yy, col2+2, f"{key:<22} {','.join(nn for _,nn in owners[:1])}", C_NORMAL); yy+=1
     except Exception as e:
         try: win.addstr(5, 2, f"Error: {e}", curses.color_pair(C_RED))
         except: pass
@@ -2231,48 +2454,149 @@ NETWORK_ACTIONS = [
     ("Edit IP/port config",          "net_config"),
 ]
 
-def draw_updates_tab(win, h, w, sel=0):
-    """Image update tracker tab."""
+NETWORK_EDIT_ACTIONS = [
+    ("✎  IP range — start",        "ip_start"),
+    ("✎  IP range — end",          "ip_end"),
+    ("✎  Port range — start",      "port_start"),
+    ("✎  Port range — end",        "port_end"),
+    ("➕ Add IP to blacklist",      "ip_bl_add"),
+    ("➖ Remove IP from blacklist", "ip_bl_rm"),
+    ("➕ Add IP to whitelist",      "ip_wl_add"),
+    ("➖ Remove IP from whitelist", "ip_wl_rm"),
+    ("➕ Add port to blacklist",    "port_bl_add"),
+    ("➖ Remove port from blacklist","port_bl_rm"),
+    ("↻  Rescan now",              "rescan"),
+    ("✕  Cancel",                  None),
+]
+
+def do_network_action(stdscr, action):
+    """Edit network settings in stacks.yaml (the master). Invalidates the scan cache."""
+    if action is None: return
+    import sys as _s; _s.path.insert(0, "/usr/local/lib"); import stacks_config as SC
+    cfg = SC.load()
+    scalars = {"ip_start":("ip_range_start","IP_RANGE_START","Start IP:"),
+               "ip_end":("ip_range_end","IP_RANGE_END","End IP:"),
+               "port_start":("port_range_start","PORT_RANGE_START","Start port:"),
+               "port_end":("port_range_end","PORT_RANGE_END","End port:")}
+    adds = {"ip_bl_add":"ip_blacklist","ip_wl_add":"ip_whitelist","port_bl_add":"port_blacklist"}
+    rms  = {"ip_bl_rm":"ip_blacklist","ip_wl_rm":"ip_whitelist","port_bl_rm":"port_blacklist"}
+    if action in scalars:
+        fk, ik, prompt = scalars[action]
+        v = _prompt_text(stdscr, f"Edit {fk}", prompt, cfg.get(ik, ""))
+        if v: SC.yaml_set_scalar(fk, v)
+    elif action in adds:
+        key = adds[action]
+        v = _prompt_text(stdscr, f"Add to {key}", "Value:", "")
+        if v:
+            items = SC.yaml_get_list(key)
+            if v not in items:
+                items.append(v); SC.yaml_set_list(key, items)
+    elif action in rms:
+        key = rms[action]
+        items = SC.yaml_get_list(key)
+        if items:
+            res = run_popup_action(stdscr, f"Remove from {key}", [(x, x) for x in items] + [("✕ Cancel", None)])
+            if res and res[1]:
+                SC.yaml_set_list(key, [x for x in items if x != res[1]])
+    _net_cache["data"] = None  # force rescan so the tab reflects the change
+
+
+def get_update_rows():
+    """Build the unified Updates-tab row list: available updates first, then
+    update history (newest first). Each row is a dict the tab can render/filter."""
+    rows = []
+    summary = {"updates": 0, "ok": 0, "errors": 0, "hist": 0}
     try:
-        win.addstr(3, 2, "IMAGE UPDATES", curses.color_pair(C_ACCENT))
-        win.addstr(4, 2, "─" * (w-4), curses.color_pair(C_DIM))
-    except: pass
+        import sys as _s
+        if "/usr/local/lib" not in _s.path: _s.path.insert(0, "/usr/local/lib")
+        import importlib, stacks_updates as _su
+        importlib.reload(_su)
+    except Exception:
+        _su = None
+    # available updates (from cache)
     try:
+        import json as _j
         cache_file = os.path.expanduser("~/.config/stacks/update_cache.json")
-        if os.path.exists(cache_file):
-            import json as _j
-            cache = _j.load(open(cache_file))
-            updates = [v for v in cache.values() if isinstance(v,dict) and v.get("has_update")]
-            ok      = [v for v in cache.values() if isinstance(v,dict) and not v.get("has_update") and not v.get("error")]
-            errors  = [v for v in cache.values() if isinstance(v,dict) and v.get("error")]
-            try:
-                win.addstr(5, 2, f"⬆ Updates available: {len(updates)}   ✔ Up to date: {len(ok)}   ✘ Errors: {len(errors)}", curses.color_pair(C_YELLOW))
-            except: pass
-            y = 7
-            if updates:
-                try: win.addstr(y, 2, "UPDATES AVAILABLE:", curses.color_pair(C_GREEN)); y+=1
-                except: pass
-                for u in updates:
-                    if y >= h-2: break
-                    img = u.get("image","")[:40]
-                    stks = ", ".join(u.get("stacks",[])[:3])
-                    try: win.addstr(y, 4, f"⬆ {img:<42} {stks}"[:w-6], curses.color_pair(C_GREEN)); y+=1
-                    except: pass
-                y += 1
-            if ok:
-                try: win.addstr(y, 2, "UP TO DATE:", curses.color_pair(C_DIM)); y+=1
-                except: pass
-                for u in ok[:10]:
-                    if y >= h-2: break
-                    img = u.get("image","")[:40]
-                    try: win.addstr(y, 4, f"✔ {img}"[:w-6], curses.color_pair(C_DIM)); y+=1
-                    except: pass
-        else:
-            try: win.addstr(5, 2, "No update cache yet. Press C to check for updates.", curses.color_pair(C_DIM))
-            except: pass
-    except Exception as e:
-        try: win.addstr(5, 2, f"Error: {e}", curses.color_pair(C_RED))
+        cache = _j.load(open(cache_file)) if os.path.exists(cache_file) else {}
+        for v in cache.values():
+            if not isinstance(v, dict): continue
+            if v.get("has_update"):
+                summary["updates"] += 1
+                rows.append({
+                    "kind": "update", "image": v.get("image",""),
+                    "tag": v.get("tag",""), "stacks": v.get("stacks",[]),
+                    "old": v.get("local_digest",""), "new": v.get("remote_digest",""),
+                    "ts": v.get("checked", 0),
+                })
+            elif v.get("error"):
+                summary["errors"] += 1
+            else:
+                summary["ok"] += 1
+    except Exception:
+        pass
+    # history (newest first)
+    try:
+        if _su:
+            for r in _su.get_history():
+                summary["hist"] += 1
+                rows.append({
+                    "kind": "hist", "image": r.get("image",""),
+                    "tag": r.get("tag",""), "stacks": r.get("stacks",[]),
+                    "event": r.get("event",""), "ts": r.get("ts", 0),
+                    "old": r.get("old",""), "new": r.get("new",""),
+                    "old_short": r.get("old_short","—"), "new_short": r.get("new_short","—"),
+                })
+    except Exception:
+        pass
+    return rows, summary
+
+def _row_image(r):
+    return r.get("image","")
+
+def draw_updates_tab(win, h, w, rows, summary, sel, scroll):
+    """Image update tracker tab — available updates + searchable history."""
+    import time as _t
+    try:
+        win.addstr(3, 2, f"⬆ Updates: {summary['updates']}   ✔ OK: {summary['ok']}   "
+                         f"✘ Err: {summary['errors']}   ⟳ History: {summary['hist']}",
+                   curses.color_pair(C_YELLOW))
+        win.addstr(4, 2, f'{"WHEN":<13} {"EVENT":<10} {"IMAGE":<40} {"OLD → NEW"}',
+                   curses.color_pair(C_ACCENT))
+        win.addstr(5, 2, "─" * (w-4), curses.color_pair(C_DIM))
+    except: pass
+    if not rows:
+        try: win.addstr(7, 2, "No updates or history yet. Press C to check for updates.",
+                        curses.color_pair(C_DIM))
         except: pass
+        return
+    visible = h - 8
+    for i, r in enumerate(rows[scroll:scroll+visible]):
+        y = 6 + i
+        idx = scroll + i
+        img = r.get("image","")[:40]
+        if r["kind"] == "update":
+            when = "now"
+            ev = "AVAILABLE"
+            ver = "update ready"
+            color = C_GREEN
+            mark = "⬆"
+        else:
+            when = _t.strftime("%m-%d %H:%M", _t.localtime(r.get("ts", 0)))
+            ev = r.get("event","")
+            ver = f'{r.get("old_short","—")} → {r.get("new_short","—")}'
+            color = C_CYAN if ev == "pulled" else C_YELLOW
+            mark = "⬇" if ev == "pulled" else "⬆"
+        line = f'{when:<13} {ev:<10} {img:<40} {ver}'
+        if idx == sel:
+            try: win.addstr(y, 2, f"{mark} " + line[:w-6], curses.color_pair(C_SELECTED))
+            except: pass
+        else:
+            try:
+                win.addstr(y, 2, f"{mark} {when:<13} ", curses.color_pair(C_DIM))
+                win.addstr(y, 17, f"{ev:<10} ", curses.color_pair(color))
+                win.addstr(y, 28, f"{img:<40} ", curses.color_pair(C_NORMAL))
+                win.addstr(y, 69, f"{ver}"[:w-71], curses.color_pair(C_DIM))
+            except: pass
 
 UPDATES_ACTIONS = [
     ("Check for updates (all images)",    "upd_check_all"),
@@ -2320,16 +2644,22 @@ def main(stdscr):
     scroll = 0
     cfg_sel = 0
 
+    # Per-tab letter-jump / inline-search filter (tabs 0,1,9). Resets on tab switch.
+    flt_letter = None    # None or 'a'-'z'/'#'
+    flt_inline = ""      # typed substring
+    flt_mode   = False   # True while typing the inline filter
+    FILTERABLE = (0, 1, 9)
+
     FOOTER_HINTS = {
-        0: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Action', 'Q Quit'],
-        1: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Action', 'A All-Stacks', 'Q Quit'],
+        0: ['↑↓ Nav', 'a-z Jump', '/ Search', '↔ Tab', 'ENTER Action', 'Q Quit'],
+        1: ['↑↓ Nav', 'a-z Jump', '/ Search', '↔ Tab', 'ENTER Action', 'A All-Stacks', 'Q Quit'],
         2: ['↑↓ Select', '↔ Tab', 'ENTER Open', 'Q Quit'],
         3: ['↑↓ Select', '↔ Tab', 'ENTER Edit', 'A Inject Art', 'Q Quit'],
         4: ['I Inject All', 'S Strip All', 'D Dyn Inject', 'X Dyn Strip', 'E Edit Art Conf', 'Q Quit'],
         6: ['↑↓ Navigate', 'ENTER Select', 'Q Quit'],
-        2: ['↔ Switch Tab', 'Q Quit'],
-        3: ['↔ Switch Tab', 'Q Quit'],
-        4: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Edit', 'Q Quit'],
+        7: ['↑↓ Navigate', '↔ Switch Tab', 'ENTER Edit', 'Q Quit'],
+        8: ['A Edit', 'S Scan', 'E Edit YAML', '↔ Tab', 'Q Quit'],
+        9: ['↑↓ Nav', 'a-z Jump', '/ Search', 'ENTER Detail', 'C Check', 'F Force', 'P Pull', 'Q Quit'],
     }
 
     while True:
@@ -2346,13 +2676,39 @@ def main(stdscr):
         with open("/tmp/tab_live.txt","w") as _f: _f.write(f"tab={tab} {TABS[tab] if tab < len(TABS) else chr(63)}\n")
         with open("/tmp/tab_live.txt","w") as _f: _f.write(f"tab={tab} {TABS[tab] if tab < len(TABS) else chr(63)}\n")
 
-        # Tabs
-        draw_tabs(stdscr, 2, w, TABS, tab)
-
-        # Content
+        # Content data
         with data_lock:
             containers = list(app_data['containers'])
             stacks     = list(app_data['stacks'])
+        update_rows, update_summary = [], {}
+        if tab == 9:
+            update_rows, update_summary = get_update_rows()
+
+        # Apply per-tab letter/inline filter (tabs 0,1,9)
+        flt_shown = flt_total = 0
+        if tab == 0:
+            flt_total = len(containers)
+            containers = list_filter(containers,
+                [lambda c: c.get('name',''), lambda c: c.get('image',''), lambda c: c.get('stack','')],
+                flt_letter, flt_inline)
+            flt_shown = len(containers)
+        elif tab == 1:
+            flt_total = len(stacks)
+            stacks = list_filter(stacks, [lambda s: s.get('name','')], flt_letter, flt_inline)
+            flt_shown = len(stacks)
+        elif tab == 9:
+            flt_total = len(update_rows)
+            update_rows = list_filter(update_rows,
+                [lambda r: r.get('image',''), lambda r: r.get('event','')], flt_letter, flt_inline)
+            flt_shown = len(update_rows)
+
+        # Tabs + filter bar / divider
+        draw_tabs(stdscr, 1, w, TABS, tab)
+        if tab in FILTERABLE:
+            draw_filter_bar(stdscr, 2, w, flt_letter, flt_inline, flt_mode, flt_shown, flt_total)
+        else:
+            try: stdscr.addstr(2, 0, "─" * (w-1), curses.color_pair(C_DIM))
+            except curses.error: pass
 
         if tab == 0:
             if sel >= len(containers): sel = max(0, len(containers)-1)
@@ -2375,7 +2731,8 @@ def main(stdscr):
         elif tab == 8:
             draw_network_tab(stdscr, h, w)
         elif tab == 9:
-            draw_updates_tab(stdscr, h, w)
+            if sel >= len(update_rows): sel = max(0, len(update_rows)-1)
+            draw_updates_tab(stdscr, h, w, update_rows, update_summary, sel, scroll)
 
         draw_footer(stdscr, h, w, FOOTER_HINTS.get(tab, []))
         stdscr.refresh()
@@ -2390,16 +2747,41 @@ def main(stdscr):
             stdscr.clear()
             continue
 
-        # Global keys
-        if k in (ord('q'), ord('Q')): break
+        # ── Letter-jump / inline-search filter (tabs 0,1,9) ──────────────────
+        if tab in FILTERABLE:
+            if flt_mode:
+                if k in (10, 13):
+                    flt_mode = False
+                elif k == 27:
+                    flt_mode = False; flt_inline = ""; sel = 0; scroll = 0
+                elif k in (curses.KEY_BACKSPACE, 127, 8):
+                    flt_inline = flt_inline[:-1]; sel = 0; scroll = 0
+                elif 32 <= k <= 126:
+                    flt_inline += chr(k); sel = 0; scroll = 0
+                continue
+            if k == ord('/'):
+                flt_mode = True; flt_inline = ""; continue
+            if k == ord('#'):
+                flt_letter = None if flt_letter == '#' else '#'; sel = 0; scroll = 0; continue
+            if 97 <= k <= 122:  # a-z (lowercase) → letter jump (uppercase stays a command)
+                ch = chr(k)
+                flt_letter = None if flt_letter == ch else ch; sel = 0; scroll = 0; continue
+            if k == 27 and (flt_letter or flt_inline):
+                flt_letter = None; flt_inline = ""; sel = 0; scroll = 0; continue
+
+        # Global keys  (ESC also quits — on filterable tabs the filter block above
+        # consumes ESC first to clear an active search, so the next ESC exits)
+        if k in (27, ord('q'), ord('Q')): break
         if k == curses.KEY_RIGHT:
             tab = (tab + 1) % len(TABS)
             curses.flushinp()
             sel = 0; scroll = 0
+            flt_letter = None; flt_inline = ""; flt_mode = False
         elif k == curses.KEY_LEFT:
             tab = (tab - 1) % len(TABS)
             curses.flushinp()
             sel = 0; scroll = 0
+            flt_letter = None; flt_inline = ""; flt_mode = False
 
         # Tab-specific keys - only process if not a tab-switch key
         if k in (curses.KEY_RIGHT, curses.KEY_LEFT):
@@ -2446,7 +2828,7 @@ def main(stdscr):
                     f'Stack: {s["name"][:20]}', STACK_ACTIONS)
                 if result and result[1]:
                     do_stack_action(stdscr, s['name'], result[1])
-            elif k in (ord('a'), ord('A')):
+            elif k == ord('A'):  # lowercase a is the letter-jump filter
                 result = run_popup_action(stdscr, 'ALL Stacks', GLOBAL_ACTIONS)
                 if result and result[1]:
                     do_global_action(stdscr, result[1])
@@ -2593,21 +2975,38 @@ def main(stdscr):
                     run_log_popup(stdscr, 'Repair ALL', f'python3 /usr/local/lib/stacks_repair.py {STACKS_DIR}')
 
         elif tab == 8:  # Network
-            if k in (10, 13, ord("s"), ord("S")):
+            if k in (ord("a"), ord("A")):
+                res = run_popup_action(stdscr, "Network — Edit", NETWORK_EDIT_ACTIONS)
+                if res: do_network_action(stdscr, res[1])
+                stdscr.clear()
+            elif k in (10, 13, ord("s"), ord("S")):
                 run_log_popup(stdscr, "Scan collisions", "python3 /usr/local/lib/stacks_collision.py")
+                _net_cache["data"] = None
                 stdscr.clear()
             elif k in (ord("e"), ord("E")):
                 curses.endwin()
-                os.system(f'{os.environ.get("EDITOR","nano")} {os.path.expanduser("~/.config/stacks/stacks.conf")}')
+                os.system(f'{os.environ.get("EDITOR","nano")} {os.path.expanduser("~/.config/stacks/stacks.yaml")}')
                 stdscr = curses.initscr(); init_colors(); curses.curs_set(0); stdscr.clear()
-        elif tab == 9:  # Updates
-            if k in (ord("c"), ord("C")):
+                _net_cache["data"] = None
+        elif tab == 9:  # Updates  (lowercase letters are the letter-jump filter)
+            items = update_rows
+            vis = h - 8
+            if k == curses.KEY_UP:
+                if sel > 0: sel -= 1
+                if sel < scroll: scroll = sel
+            elif k == curses.KEY_DOWN:
+                if sel < len(items)-1: sel += 1
+                if sel >= scroll + vis: scroll = sel - vis + 1
+            elif k in (10, 13) and items:
+                show_update_detail(stdscr, items[sel])
+                stdscr.clear()
+            elif k == ord("C"):
                 run_log_popup(stdscr, "Check updates", "python3 /usr/local/lib/stacks_updates.py")
                 stdscr.clear()
-            elif k in (ord("f"), ord("F")):
+            elif k == ord("F"):
                 run_log_popup(stdscr, "Force check", "python3 /usr/local/lib/stacks_updates.py --force")
                 stdscr.clear()
-            elif k in (ord("p"), ord("P")):
+            elif k == ord("P"):
                 run_log_popup(stdscr, "Pull updates", "python3 /usr/local/lib/stacks_updates.py --pull")
                 stdscr.clear()
         elif tab == 7:  # Configs

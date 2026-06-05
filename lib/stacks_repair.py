@@ -35,6 +35,10 @@ def _snap_conf():
                 cfg[k.strip()] = v.strip()
     except OSError:
         pass
+    try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        cfg.update(_sc.load_named('global_inject'))   # YAML master overlay
+    except Exception: pass
     return {
         'dir':        os.path.expanduser(cfg.get('SNAPSHOT_DIR', '~/.config/stacks/snapshots')),
         'keep':       int(cfg.get('SNAPSHOT_KEEP', '5') or '5'),
@@ -192,6 +196,13 @@ def snapshot_after_up(path):
 def _snap_conf_int(key, default):
     cp = os.path.expanduser("~/.config/stacks/global_inject.conf")
     try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        _v = _sc.load_named('global_inject').get(key)
+        if _v is not None:
+            return int(_v)
+    except Exception:
+        pass
+    try:
         for line in open(cp):
             line = line.strip()
             if line.startswith(key + '='):
@@ -247,7 +258,14 @@ def repair_file(path, dry_run=False):
         import os as _os
         _conf = _os.path.expanduser("~/.config/stacks/stacks.conf")
         _remove_orphans = False
-        if _os.path.exists(_conf):
+        try:
+            import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+            _ro = _sc.load().get('FIX_REMOVE_ORPHANS')
+            if _ro is not None:
+                _remove_orphans = str(_ro).strip().strip('"') in ('1','on','true','True')
+                _conf = None  # YAML answered; skip the .conf scan below
+        except Exception: pass
+        if _conf and _os.path.exists(_conf):
             for _l in open(_conf):
                 if _l.strip().startswith('FIX_REMOVE_ORPHANS='):
                     _remove_orphans = _l.strip().split('=',1)[1].strip().strip('"') in ('1','on','true','True')

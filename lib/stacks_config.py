@@ -71,6 +71,8 @@ SCALAR_MAP = {
     'inject_cpu_pinning':'INJECT_CPUSET','inject_block_io':'INJECT_BLKIO','inject_ulimits':'INJECT_ULIMITS',
     # dynamics generator (rich, config-driven) + DB entrypoint generation
     'rich_dynamics_generator':'GEN_RICH','generate_db_entrypoints':'GEN_DB_ENTRYPOINTS',
+    # base/location overrides (everything else derives from data_folder if unset)
+    'data_folder':'STACKS_DATA_DIR','logs_folder':'STACKS_LOG_DIR','backup_folder':'BACKUP_DEST',
 }
 
 # friendly YAML list key -> (internal key, join char)

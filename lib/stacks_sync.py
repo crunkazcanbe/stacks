@@ -12,6 +12,11 @@ SVC_FILE   = os.path.join(CONF_DIR, "all_services.txt")
 
 def get_default_desc():
     try:
+        import sys as _s; _s.path.insert(0, '/usr/local/lib'); import stacks_config as _sc
+        v = _sc.load().get("BUILD_DEFAULT_DESC")
+        if v: return v
+    except Exception: pass
+    try:
         for line in open(os.path.join(CONF_DIR, "stacks.conf")):
             l = line.strip()
             if l.startswith("BUILD_DEFAULT_DESC="):
