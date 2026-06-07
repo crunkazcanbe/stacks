@@ -2324,7 +2324,7 @@ def do_container_action(stdscr, container_name, stack_file, action):
     run_log_popup(stdscr, f'{action} → {container_name}', cmd)
 
 # ── Tab views ────────────────────────────────────────────────────────────────
-TABS = ['Containers', 'Stacks', 'Logs', 'Dynamics', 'Art', 'Backup', 'Build', 'Configs', 'Network', 'Updates', 'Settings']
+TABS = ['Containers', 'Stacks', 'Logs', 'Dynamics', 'Art', 'Backup', 'Build', 'Configs', 'Network', 'Updates', 'Settings', 'Upgrade']
 
 def draw_containers_tab(win, h, w, containers, sel, scroll):
     win.addstr(4, 2, f'{"NAME":<26} {"STACK":<12} {"STATUS":<12} {"MEMORY":<19} {"CACHE":<9} {"IMAGE"}',
@@ -2633,6 +2633,69 @@ def draw_configs_tab(win, h, w, sel):
             attr = curses.color_pair(C_ACCENT) if is_dir else curses.color_pair(C_NORMAL)
             try: win.addstr(y, 2, f"     {line}", attr)
             except: pass
+
+# Cache for the Upgrade tab (avoid a git-fetch on every redraw)
+_upd_cache = {"data": None}
+
+def draw_upgrade_tab(win, h, w, sel=0):
+    """Self-update tab: check GitHub for a newer stacks program and apply it."""
+    def P(yy, xx, txt, cp=C_NORMAL):
+        try: win.addstr(yy, xx, str(txt)[:max(0, w-xx-1)], curses.color_pair(cp))
+        except Exception: pass
+    P(4, 2, "UPGRADE — CHECK GITHUB FOR PROGRAM UPDATES", C_ACCENT)
+    P(5, 2, "─" * (w-4), C_DIM)
+    if _upd_cache["data"] is None:
+        try: win.addstr(4, 46, " checking… ", curses.color_pair(C_DIM)); win.refresh()
+        except Exception: pass
+        try:
+            import importlib.util as _ilu
+            spec = _ilu.spec_from_file_location("stacks_selfupdate", "/usr/local/lib/stacks_selfupdate.py")
+            _su = _ilu.module_from_spec(spec); spec.loader.exec_module(_su)
+            _upd_cache["data"] = _su.status()
+        except Exception as e:
+            _upd_cache["data"] = {"error": str(e)[:120]}
+    st = _upd_cache["data"]
+    if st.get("error"):
+        P(7, 4, "⚠ " + st["error"], C_YELLOW)
+        P(9, 4, "Set the clone path:  stacks config STACKS_REPO_DIR /path/to/clone", C_DIM)
+        P(h-2, 2, "R Re-check    ←→ Tabs    Q Quit", C_DIM)
+        return
+    P(7, 4,  f"Program     : stacks (includes this menu)", C_CYAN)
+    P(8, 4,  f"Repo        : {st.get('repo','?')}  ({st.get('branch','?')})", C_DIM)
+    P(9, 4,  f"Installed   : {st.get('current','?')}", C_NORMAL)
+    P(10, 4, f"On GitHub   : {st.get('latest','?')}", C_NORMAL)
+    if st.get("fetch_error"):
+        P(11, 4, f"⚠ couldn't reach GitHub: {st['fetch_error']}", C_YELLOW)
+    y = 13
+    if st.get("up_to_date"):
+        P(y, 4, "✓ Up to date — nothing to install.", C_GREEN); y += 2
+    else:
+        P(y, 4, f"⬆ {st.get('behind',0)} update(s) available:", C_YELLOW); y += 1
+        for line in (st.get("changelog") or [])[:h-19]:
+            P(y, 6, "• " + line, C_NORMAL); y += 1
+        if st.get("installed_dirty"):
+            y += 1
+            P(y, 4, f"⚠ installed copy has {len(st.get('dirty_files',[]))} local change(s) that update "
+                    f"would overwrite (a backup is always made first).", C_YELLOW); y += 1
+        y += 1
+        P(y, 4, "Press ENTER to update now.", C_ACCENT); y += 1
+    hint = "ENTER Update   R Re-check   ←→ Tabs   Q Quit" if not st.get("up_to_date") else "R Re-check   ←→ Tabs   Q Quit"
+    P(h-2, 2, hint, C_DIM)
+
+
+def do_upgrade_action(stdscr):
+    """ENTER on the Upgrade tab: confirm + apply the update via the CLI."""
+    st = _upd_cache.get("data") or {}
+    if st.get("error") or st.get("up_to_date"):
+        return
+    force = st.get("installed_dirty", False)
+    label = "⬇  Yes — update now" + (" (overwrite local)" if force else "")
+    if not _confirm_popup(stdscr, f"Install {st.get('behind',0)} update(s) from GitHub?", label):
+        return
+    cmd = f"{STACKS_BIN} update apply" + (" --force" if force else "")
+    run_log_popup(stdscr, "Updating stacks", cmd)
+    _upd_cache["data"] = None  # force a re-check after applying
+
 
 # Cache for network tab to avoid slow rescan on every draw
 _net_cache = {"data": None, "ts": 0}
@@ -3061,6 +3124,7 @@ def main(stdscr):
         8: ['A Edit', 'S Scan', 'D Dedupe', 'E Edit YAML', '↔ Tab', 'Q Quit'],
         9: ['↑↓ Nav', 'a-z Jump', '/ Search', 'ENTER Detail', 'C Check', 'F Force', 'P Pull', 'Q Quit'],
         10: ['↑↓ Nav', 'ENTER Toggle/Edit', '↔ Tab', 'Q Quit'],
+        11: ['ENTER Update', 'R Re-check', '←→ Tabs', 'Q Quit'],
     }
 
     while True:
@@ -3136,6 +3200,8 @@ def main(stdscr):
             draw_updates_tab(stdscr, h, w, update_rows, update_summary, sel, scroll)
         elif tab == 10:
             draw_settings_tab(stdscr, h, w, sel, scroll)
+        elif tab == 11:
+            draw_upgrade_tab(stdscr, h, w)
 
         draw_footer(stdscr, h, w, FOOTER_HINTS.get(tab, []))
         stdscr.refresh()
@@ -3471,6 +3537,13 @@ def main(stdscr):
                                       (s_desc[:46] or "Value:"), s_val, cancel_val=None)
                     if nv is not None and nv != s_val:
                         _settings_save(s_key, nv)
+                stdscr.clear()
+        elif tab == 11:  # Upgrade (self-update)
+            if k in (ord('r'), ord('R')):
+                _upd_cache["data"] = None        # force a fresh git fetch
+                stdscr.clear()
+            elif k in (10, 13):
+                do_upgrade_action(stdscr)
                 stdscr.clear()
 
 def run():

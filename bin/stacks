@@ -126,6 +126,8 @@ _register_config_options() {
   _stacks_config_option "IMAGE_HISTORY_ENABLED" "1"  "Record image version history (for rollback) — snapshots digests over time"
   _stacks_config_option "IMAGE_HISTORY_KEEP"   "10"  "How many past versions to keep per image (oldest pruned beyond this)"
   _stacks_config_option "RECLAIM_PROTECT_STACK_IMAGES" "1" "Reclaim: protect images referenced by a stack compose file even when their container is down (Sablier-safe). 'reclaim clean --aggressive' overrides this for one run"
+  _stacks_config_option "STACKS_REPO_DIR"      ""    "Path to the stacks git clone (for 'stacks update' self-update); blank = autodetect"
+  _stacks_config_option "STACKS_UPDATE_BRANCH" "master" "Git branch 'stacks update' checks for new versions"
   _stacks_config_option "FIX_CONVERT_NAMED_TO_BIND" "1" "Convert named volumes to bind mounts"
   _stacks_config_option "FIX_STRIP_VOLUMES"    "1" "After 'fix', delete now-unused top-level named-volume declarations (bind-mount cleanup)"
   _stacks_config_option "FIX_AUTO_DEPENDS_ON"  "1"   "Auto-add depends_on for linked services"
@@ -356,7 +358,7 @@ CONTINUE_COUNT=-1
 
 for arg in "$@"; do
   # Catch the primary action command first
-  if [ -z "$COMMAND" ] && [[ "${arg,,}" =~ ^(up|down|start|stop|restart|rm|snapshot|get|kill|ls|status|logs|inspect|pull|build|volume|network|dynamics|reload|clean|search|regsearch|inject|strip|art|backup|describe|gen|fix|custom|scale|proxy|menu|images|dedupe|volclean|reclaim)$ ]]; then
+  if [ -z "$COMMAND" ] && [[ "${arg,,}" =~ ^(up|down|start|stop|restart|rm|snapshot|get|kill|ls|status|logs|inspect|pull|build|volume|network|dynamics|reload|clean|search|regsearch|inject|strip|art|backup|describe|gen|fix|custom|scale|proxy|menu|images|dedupe|volclean|reclaim|update|selfupdate|upgrade)$ ]]; then
      COMMAND="${arg,,}"
      continue
   fi
@@ -491,7 +493,7 @@ if [ "$DO_ATTACH" -eq 1 ]; then
   fi
 fi
 
-if [ -n "$TARGET_STACK" ] && [ ! -f "$STACKS_DIR/$TARGET_STACK.yml" ] && [[ ! "$COMMAND" =~ ^(regsearch|get|kill|status|ls|clean|reload|search|build|pull|logs|inspect|volume|network|dynamics|inject|strip|art|backup|gen|fix|scale|proxy|menu|images|dedupe|volclean|reclaim)$ ]]; then
+if [ -n "$TARGET_STACK" ] && [ ! -f "$STACKS_DIR/$TARGET_STACK.yml" ] && [[ ! "$COMMAND" =~ ^(regsearch|get|kill|status|ls|clean|reload|search|build|pull|logs|inspect|volume|network|dynamics|inject|strip|art|backup|gen|fix|scale|proxy|menu|images|dedupe|volclean|reclaim|update|selfupdate|upgrade)$ ]]; then
   printf "\e[?25h"
   echo -e "\e[1;31m✘ Error: Stack $TARGET_STACK.yml not found in $STACKS_DIR\e[0m"
   exit 1
@@ -2639,6 +2641,15 @@ elif [ "$COMMAND" == "volclean" ]; then
 elif [ "$COMMAND" == "reclaim" ]; then
   printf "\e[?25h"
   STACKS_DIR="$STACKS_DIR" python3 /usr/local/lib/stacks_reclaim.py "${TARGET_ARGS[@]}"
+  exit $?
+
+# ---------------------------------------------------------
+# COMMAND BRANCH: UPDATE / SELFUPDATE / UPGRADE (self-update from GitHub)
+# Usage: stacks update [check] | stacks update apply [--force] | stacks update where
+# ---------------------------------------------------------
+elif [[ "$COMMAND" =~ ^(update|selfupdate|upgrade)$ ]]; then
+  printf "\e[?25h"
+  python3 /usr/local/lib/stacks_selfupdate.py "${TARGET_ARGS[@]}"
   exit $?
 
 # ---------------------------------------------------------
